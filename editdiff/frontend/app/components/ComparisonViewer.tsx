@@ -48,6 +48,12 @@ export function ComparisonViewer({
     const a = aRef.current;
     const b = bRef.current;
     if (!a || !b) return;
+    if (!a.paused && Number.isFinite(b.duration) && a.currentTime >= b.duration) {
+      a.pause();
+      b.pause();
+      a.currentTime = b.duration;
+      setPlaying(false);
+    }
     if (Math.abs(b.currentTime - a.currentTime) > SYNC_TOLERANCE) {
       b.currentTime = Math.min(a.currentTime, b.duration || a.currentTime);
     }
@@ -98,6 +104,7 @@ export function ComparisonViewer({
     const a = aRef.current;
     const b = bRef.current;
     if (!a || !b) return;
+    if (a.currentTime >= Math.min(a.duration, b.duration) - 0.05) seekTo(0);
     b.currentTime = a.currentTime;
     try {
       await Promise.all([a.play(), b.play()]);
@@ -106,7 +113,7 @@ export function ComparisonViewer({
       pause();
       setMediaError(true);
     }
-  }, [pause]);
+  }, [pause, seekTo]);
 
   const toggle = useCallback(() => {
     if (playing) pause();
@@ -157,6 +164,7 @@ export function ComparisonViewer({
             playsInline
             preload="metadata"
             muted={audioSource !== "v2"}
+            onEnded={pause}
             onError={() => setMediaError(true)}
           />
           <figcaption>V2 · AFTER</figcaption>

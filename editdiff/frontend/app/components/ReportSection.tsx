@@ -156,8 +156,8 @@ export function ReportSection({
           <p className="ledger__foot">
             {report.results.length} requested revision{report.results.length === 1 ? "" : "s"} checked
             across {timecode(Math.max(...markers.map((m) => m.seconds), 0))} of timeline.{" "}
-            <VerdictBadge verdict="REVIEW" size="sm" /> means EditDiff found a change it cannot
-            attribute to your note with certainty — it will not fake a pass.
+            <VerdictBadge verdict="REVIEW" size="sm" /> means the available evidence cannot
+            establish whether the requested edit landed — it will not fake a pass.
           </p>
         </div>
       </div>

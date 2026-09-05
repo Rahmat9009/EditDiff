@@ -15,7 +15,9 @@ def test_real_api_report_persistence_and_evidence(client, sample):
     response = client.post('/analyze', **upload(sample))
     assert response.status_code == 200, response.text
     report = response.json()
-    assert report['summary'] == {'PASS': 2, 'FAIL': 1, 'REVIEW': 2}
+    spec = json.loads((sample/'golden-demo.json').read_text())
+    assert report['summary'] == spec['expected_summary']
+    assert [r['verdict'] for r in report['results']] == [r['expected_verdict'] for r in spec['revisions']]
     assert set(report) >= {'report_id', 'summary', 'results'}
     for result in report['results']:
         assert set(result) >= {'request', 'verdict', 'confidence', 'evidence'}
@@ -33,7 +35,8 @@ def test_real_api_report_persistence_and_evidence(client, sample):
     assert client.get(f'/reports/{report_id}').json() == report
     exported = client.get(f'/reports/{report_id}/export')
     assert exported.json() == report
-    assert exported.headers['content-disposition'].startswith('attachment;')
+    assert exported.headers['content-type'] == 'application/json'
+    assert exported.headers['content-disposition'] == f'attachment; filename="editdiff-{report_id}.json"'
     # Disk is the source of truth; no process-local report cache is needed.
     stored = main.REPORTS / f'{report_id}.json'
     assert AnalyzeResponse.model_validate_json(stored.read_text()).model_dump(mode='json') == report

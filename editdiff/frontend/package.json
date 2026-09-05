@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "check:demo": "node scripts/check-demo.mjs",
+    "prebuild": "npm run check:demo"
   },
   "dependencies": {
     "next": "16.3.3",

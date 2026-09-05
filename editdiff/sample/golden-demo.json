@@ -1,0 +1,30 @@
+{
+  "description": "Canonical golden demo. Expected verdicts apply with Gemini disabled.",
+  "expected_summary": {
+    "PASS": 2,
+    "FAIL": 1,
+    "REVIEW": 2
+  },
+  "revisions": [
+    {
+      "note": "00:01.5 mute the background audio",
+      "expected_verdict": "PASS"
+    },
+    {
+      "note": "00:04 Change the title from 'DRAFT CUT' to 'LAUNCH DAY'.",
+      "expected_verdict": "REVIEW"
+    },
+    {
+      "note": "00:06 punch in / crop tighter",
+      "expected_verdict": "REVIEW"
+    },
+    {
+      "note": "00:08 Replace the B-roll with the city shot.",
+      "expected_verdict": "FAIL"
+    },
+    {
+      "note": "00:10.5 remove the pause",
+      "expected_verdict": "PASS"
+    }
+  ]
+}

@@ -10,16 +10,6 @@ import { ReportSection } from "./components/ReportSection";
 import { SiteHeader } from "./components/SiteHeader";
 import { StatusPanel } from "./components/StatusPanel";
 
-const DEMO_NOTES = `00:03 mute the background audio
-00:05 tighten the dead air before the title card
-00:06 change the on-screen title
-00:09 punch in / crop tighter
-00:11 replace shot with b-roll`;
-
-const STARTER_NOTES = `00:03 mute the background audio
-00:06 change the on-screen title
-00:09 punch in / crop tighter`;
-
 type Slots = { v1: MediaSlot | null; v2: MediaSlot | null };
 
 export default function Home() {
@@ -28,7 +18,7 @@ export default function Home() {
     v1: null,
     v2: null,
   });
-  const [notes, setNotes] = useState(STARTER_NOTES);
+  const [notes, setNotes] = useState("");
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
@@ -56,11 +46,18 @@ export default function Home() {
 
   useEffect(() => {
     const controller = new AbortController();
-    checkHealth(controller.signal).then(setApiOnline);
+    checkHealth(controller.signal).then((online) => {
+      if (!controller.signal.aborted) setApiOnline(online);
+    });
     return () => controller.abort();
   }, []);
 
   const setFile = useCallback((role: "v1" | "v2", file: File | null) => {
+    setReport(null);
+    setSelectedId(null);
+    setSeek(null);
+    setExportNote("");
+    setMetas((prev) => ({ ...prev, [role]: null }));
     setSlots((prev) => {
       const current = prev[role];
       if (current) URL.revokeObjectURL(current.url);
@@ -89,15 +86,16 @@ export default function Home() {
     setDemoBusy(true);
     setError("");
     try {
-      const [a, b] = await Promise.all([
+      const [a, b, noteFile] = await Promise.all([
         fetch("/demo/demo-v1.mp4"),
         fetch("/demo/demo-v2.mp4"),
+        fetch("/demo/edit-notes.txt"),
       ]);
-      if (!a.ok || !b.ok) throw new Error("Demo assets are missing from this build.");
-      const [blobA, blobB] = await Promise.all([a.blob(), b.blob()]);
+      if (!a.ok || !b.ok || !noteFile.ok) throw new Error("Demo assets are missing from this build.");
+      const [blobA, blobB, demoNotes] = await Promise.all([a.blob(), b.blob(), noteFile.text()]);
       setFile("v1", new File([blobA], "demo-v1.mp4", { type: "video/mp4" }));
       setFile("v2", new File([blobB], "demo-v2.mp4", { type: "video/mp4" }));
-      setNotes(DEMO_NOTES);
+      setNotes(demoNotes);
       setReport(null);
       setSelectedId(null);
     } catch (err) {
@@ -162,7 +160,7 @@ export default function Home() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `editdiff-${report.report_id}.${remote ? "bin" : "json"}`;
+      link.download = `editdiff-${report.report_id}.json`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -170,8 +168,8 @@ export default function Home() {
       setExportState("idle");
       setExportNote(
         remote
-          ? "Signed audit export downloaded from the API."
-          : "The API has no audit-export endpoint yet, so the full report JSON was downloaded instead. Use Print / PDF for a client-ready version.",
+          ? "Audit JSON downloaded from the API."
+          : "The API export could not be reached or validated. Downloaded the report already in this browser as JSON.",
       );
     } catch {
       setExportState("error");
@@ -226,8 +224,8 @@ export default function Home() {
         <div className="shell">
           <p>EditDiff · revision QA for creators and editors · evidence before assertion</p>
           <p className="muted">
-            Verdicts come from deterministic audio and visual measurement of your two exports.
-            Nothing is asserted that the evidence does not support.
+            Verdicts use audio and visual measurements, with optional semantic inspection.
+            Unsupported certainty is marked REVIEW.
           </p>
         </div>
       </footer>

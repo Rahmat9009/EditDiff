@@ -34,6 +34,8 @@ export type RevisionRequest = {
   timestamp_seconds?: number | null;
   window_seconds?: number | null;
   expected?: string | null;
+  expected_old_text?: string | null;
+  expected_new_text?: string | null;
 };
 
 /** Optional semantic layer. Shape is intentionally permissive. */
@@ -56,7 +58,20 @@ export type Evidence = {
   v2_frame_path?: string | null;
   metrics: Metric[];
   explanation: string;
-  /** Present only once the semantic verifier ships. */
+  methods?: string[];
+  window_start_seconds?: number | null;
+  window_end_seconds?: number | null;
+  reason_codes?: string[];
+  semantic_status?: string;
+  signal_agreement?: string;
+  thresholds?: Record<string, number>;
+  frames?: { version: string; timestamp_seconds: number; path: string }[];
+  before_observation?: string | null;
+  after_observation?: string | null;
+  observed_after_text?: string | null;
+  semantic_confidence?: number | null;
+  semantic_supporting_frame_indices?: number[];
+  /** Legacy optional shapes remain accepted. */
   semantic?: SemanticEvidence | null;
   semantic_result?: SemanticEvidence | null;
   semantic_evidence?: SemanticEvidence | null;

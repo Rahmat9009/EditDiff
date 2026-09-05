@@ -22,6 +22,7 @@ export function timestampOf(text: string): number | null {
   const h = Number(match[1] ?? 0);
   const m = Number(match[2] ?? 0);
   const s = Number(match[3] ?? 0);
+  if (s >= 60 || (match[1] && m >= 60)) return null;
   const frac = match[4] ? Number(`0.${match[4]}`) : 0;
   return h * 3600 + m * 60 + s + frac;
 }

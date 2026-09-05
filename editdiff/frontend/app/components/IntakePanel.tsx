@@ -5,10 +5,7 @@ import { previewNotes } from "../lib/notes";
 import { timecode } from "../lib/format";
 import { DropZone, type MediaMeta, type MediaSlot } from "./DropZone";
 
-export const NOTES_PLACEHOLDER = `00:03 mute the background audio
-00:06 change the on-screen title to "Season 2"
-00:09 punch in / crop tighter
-00:11 replace shot with b-roll`;
+export const NOTES_PLACEHOLDER = "Add a timestamp and requested edit, one request per line.";
 
 type Props = {
   v1: MediaSlot | null;
@@ -68,7 +65,7 @@ export function IntakePanel({
           hint="The cut your editor was working from."
           slot={v1}
           meta={v1Meta}
-          disabled={busy}
+          disabled={busy || demoBusy}
           onSelect={(f) => onSelect("v1", f)}
           onMeta={(m) => onMeta("v1", m)}
         />
@@ -78,7 +75,7 @@ export function IntakePanel({
           hint="The cut that came back after your notes."
           slot={v2}
           meta={v2Meta}
-          disabled={busy}
+          disabled={busy || demoBusy}
           onSelect={(f) => onSelect("v2", f)}
           onMeta={(m) => onMeta("v2", m)}
         />
@@ -96,14 +93,14 @@ export function IntakePanel({
           value={notes}
           rows={7}
           spellCheck={false}
-          disabled={busy}
+          disabled={busy || demoBusy}
           placeholder={NOTES_PLACEHOLDER}
           onChange={(e) => onNotes(e.target.value)}
           aria-describedby="notes-help"
         />
         <p className="intake__help" id="notes-help">
           Start a line with a timestamp (<code>00:06</code> or <code>6s</code>) to pin the check to
-          that moment. Without one, EditDiff checks the middle of the cut.
+          that moment. Missing or out-of-range timestamps return REVIEW.
         </p>
         {parsed.length > 0 ? (
           <ul className="chips" aria-label="Parsed requests">
@@ -118,7 +115,7 @@ export function IntakePanel({
       </div>
 
       <div className="intake__foot">
-        <button className="btn btn--run" type="submit" disabled={busy || !ready}>
+        <button className="btn btn--run" type="submit" disabled={busy || demoBusy || !ready}>
           {busy ? "Auditing…" : "Run revision audit"}
           <span aria-hidden="true">→</span>
         </button>

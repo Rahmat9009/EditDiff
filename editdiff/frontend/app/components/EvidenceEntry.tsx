@@ -46,6 +46,21 @@ export function EvidenceEntry({ result, index, selected, onSelect }: Props) {
 
         {selected ? (
           <>
+            {evidence.window_start_seconds != null && evidence.window_end_seconds != null ? (
+              <p className="disclosure__note">
+                Evidence window: {timecode(evidence.window_start_seconds, true)}–{timecode(evidence.window_end_seconds, true)}
+              </p>
+            ) : null}
+            {evidence.semantic_status && evidence.semantic_status !== "not_requested" ? (
+              <p className="disclosure__note">
+                {evidence.semantic_status === "available"
+                  ? "Semantic inspection available; combined with measured evidence."
+                  : "Semantic inspection unavailable; this verdict uses measured evidence only."}
+              </p>
+            ) : null}
+            {evidence.signal_agreement === "disagreement" ? (
+              <p className="disclosure__note">The measured and semantic signals disagree. Human review is needed.</p>
+            ) : null}
             <div className="entry__frames">
               <EvidenceFrame
                 path={evidence.v1_frame_path}
@@ -59,6 +74,13 @@ export function EvidenceEntry({ result, index, selected, onSelect }: Props) {
               />
             </div>
 
+            {evidence.after_observation ? (
+              <div className="semantic">
+                <p className="semantic__head">Observed revision</p>
+                {evidence.before_observation ? <p className="semantic__body">Before: {evidence.before_observation}</p> : null}
+                <p className="semantic__body">After: {evidence.after_observation}</p>
+              </div>
+            ) : null}
             {semantic ? (
               <div className="semantic">
                 <p className="semantic__head">
@@ -91,7 +113,12 @@ export function EvidenceEntry({ result, index, selected, onSelect }: Props) {
             ) : null}
 
             <details className="disclosure">
-              <summary>Inspect deterministic signals</summary>
+              <summary>Inspect verification details</summary>
+              {evidence.methods?.length ? <p className="disclosure__note">Methods: {evidence.methods.map((m) => m.replaceAll("_", " ")).join(", ")}</p> : null}
+              {evidence.reason_codes?.length ? <p className="disclosure__note">Reason: {evidence.reason_codes.map((r) => r.replaceAll("_", " ")).join(", ")}</p> : null}
+              {evidence.thresholds && Object.keys(evidence.thresholds).length ? (
+                <p className="disclosure__note">Thresholds: {Object.entries(evidence.thresholds).map(([name, value]) => `${name.replaceAll("_", " ")}: ${value}`).join("; ")}</p>
+              ) : null}
               <MetricTable metrics={evidence.metrics} />
               <p className="disclosure__note">{VERDICT_MEANING[verdict]}</p>
             </details>

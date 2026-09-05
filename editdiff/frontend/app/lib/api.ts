@@ -70,21 +70,18 @@ export async function analyze(
   return payload;
 }
 
-/**
- * Optional audit export. The backend endpoint may not exist yet, so callers
- * must be ready for `null` and fall back to a client-side export.
- */
+/** Download the persisted JSON report; fallback is only for an actual failure. */
 export async function fetchAuditExport(report: Report): Promise<Blob | null> {
-  const candidates = [report.export_url, `/reports/${report.report_id}/export`].filter(
-    Boolean,
-  ) as string[];
-  for (const candidate of candidates) {
-    try {
-      const res = await fetch(assetUrl(candidate) as string, { cache: "no-store" });
-      if (res.ok) return await res.blob();
-    } catch {
-      /* endpoint unavailable — fall through to the client-side export */
-    }
+  try {
+    const res = await fetch(`${API_BASE}/reports/${encodeURIComponent(report.report_id)}/export`, {
+      cache: "no-store",
+    });
+    if (!res.ok || !res.headers.get("content-type")?.includes("application/json")) return null;
+    const blob = await res.blob();
+    const payload: unknown = JSON.parse(await blob.text());
+    if (!isReport(payload) || payload.report_id !== report.report_id) return null;
+    return blob;
+  } catch {
+    return null;
   }
-  return null;
 }

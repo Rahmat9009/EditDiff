@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 const STAGES = [
   "Reading revision notes",
-  "Aligning the two exports",
+  "Inspecting the two exports",
   "Sampling audio and visual evidence",
   "Verifying requested intent",
   "Building the evidence ledger",

@@ -1,6 +1,8 @@
 """Reproducible judge fixture: python scripts/make_demo_assets.py."""
 from pathlib import Path
 import argparse
+import json
+import shutil
 import subprocess
 import tempfile
 import wave
@@ -9,12 +11,21 @@ import cv2
 import numpy as np
 
 FPS, RATE, DURATION = 20, 16000, 14
-NOTES = '''00:01.5 mute the background audio
-00:04 Change the title from 'DRAFT CUT' to 'LAUNCH DAY'.
-00:06 punch in / crop tighter
-00:08 Replace the B-roll with the city shot.
-00:10.5 remove the pause
-'''
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def canonical_notes() -> str:
+    spec = json.loads((ROOT / "sample/golden-demo.json").read_text(encoding="utf-8"))
+    return "\n".join(item["note"] for item in spec["revisions"]) + "\n"
+
+
+def sync_public(output: Path) -> None:
+    """Public assets are generated copies, never an independently authored fixture."""
+    public = ROOT / "frontend/public/demo"
+    public.mkdir(parents=True, exist_ok=True)
+    for name in ("demo-v1.mp4", "demo-v2.mp4", "edit-notes.txt"):
+        shutil.copyfile(output / name, public / name)
+
 
 
 def frame(t: float, revised: bool) -> np.ndarray:
@@ -80,11 +91,16 @@ def generate(output: Path) -> None:
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(raw), "-i", str(wav),
                 "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "128k", "-shortest", str(target)], check=True, timeout=120)
-    (output / "edit-notes.txt").write_text(NOTES, encoding="utf-8")
+    (output / "edit-notes.txt").write_text(canonical_notes(), encoding="utf-8", newline="\n")
     print(f"Created deterministic fixture in {output}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "sample")
-    generate(parser.parse_args().output)
+    parser.add_argument("--sync-only", action="store_true", help="Copy the checked-in canonical fixture to the frontend")
+    args = parser.parse_args()
+    if not args.sync_only:
+        generate(args.output)
+    if args.output.resolve() == (ROOT / "sample").resolve():
+        sync_public(args.output)

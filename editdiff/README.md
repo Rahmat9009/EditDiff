@@ -91,15 +91,11 @@ curl -F "v1=@sample/demo-v1.mp4" -F "v2=@sample/demo-v2.mp4" -F "notes=<sample/e
 
 On Windows PowerShell use `curl.exe`. The shell wrapper `scripts/make_demo_assets.sh` calls the same Python generator. Generated content is deterministic; encoded bytes can vary with codec/tool versions. V1 is 14 seconds and V2 is 13 seconds.
 
-| Note | Edit in V2 | Expected without Gemini |
-| --- | --- | --- |
-| 00:01.5 mute audio | Opening tone muted | PASS |
-| 00:04 replace DRAFT CUT with LAUNCH DAY | Exact title replacement | REVIEW |
-| 00:06 crop tighter | Actual central crop/rescale | REVIEW |
-| 00:08 replace forest B-roll with city | Intentionally unchanged | FAIL |
-| 00:10.5 remove pause | One second removed locally | PASS |
+The single golden specification is [sample/golden-demo.json](sample/golden-demo.json): it owns the revision notes, per-note verdicts, and expected summary with Gemini disabled. The generator derives `sample/edit-notes.txt` from it and copies both videos and those notes into `frontend/public/demo/`. **Load demo** fetches those exact public files; it does not author its own notes or counts.
 
-The expected no-key summary is **2 PASS / 1 FAIL / 2 REVIEW**. With valid semantic confirmation, title and qualitative crop can pass; a model's output is never guaranteed or fabricated. Tests mock the semantic service to verify that exact title evidence can pass.
+Use `python scripts/make_demo_assets.py --sync-only` to refresh public copies from an existing canonical sample without re-encoding. A custom `--output` directory does not overwrite the public demo. `npm run build` checks byte-for-byte fixture consistency before building. Backend tests assert the golden per-note verdicts and summary, as well as public asset identity.
+
+The demo intentionally includes an unchanged B-roll request and visual edits needing semantic confirmation. REVIEW is the truthful outcome when exact intent is unproven. Live semantic results can differ; no live Gemini call is used for golden automated validation.
 
 ## Verification
 
@@ -111,8 +107,17 @@ python -m compileall -q app tests ../scripts/make_demo_assets.py
 
 Tests use the checked-in fixture and installed FFmpeg/ffprobe, plus mocked semantic results; they explicitly remove Gemini configuration. Coverage includes parsing, text targets, confidence/fusion, semantic failure fallback, mute decisions, actual local pause cuts, misleading shorter exports, unchanged visuals, uploads, schema compatibility, image URLs, JSON persistence/export, and error cleanup. No backend formatter, linter, or type checker is configured in `pyproject.toml`.
 
+Frontend validation (from `frontend/`):
+
+```bash
+npm install
+npm run build
+```
+
+The frontend uses the real JSON export endpoint with a `.json` filename. It falls back to the report in browser memory only if the endpoint or response fails. Selected entries show evidence windows and semantic availability; raw methods, reasons, metrics and thresholds remain inside a disclosure.
+
 ## Current limits
 
-This is a local hackathon service without authentication, background-job scheduling, retention cleanup, or distributed report storage. Protect it before public deployment. There is no PDF export.
+This is a local hackathon service without authentication, background-job scheduling, retention cleanup, or distributed report storage. Protect it before public deployment. The backend exports JSON; the frontend also offers browser Print / PDF.
 
 Visual and mute checks use the same requested timestamp in both exports; they do not globally align timelines after earlier edits. The pause detector alone estimates local offsets, at 100 ms resolution. Repeated/static footage, speed changes, larger shifts, pauses without clear audio flanks, subtle edits below image resolution, or revisions outside the sampled window can require human review. Small logo/text edits can be below the global difference threshold. Music removal while preserving speech needs source separation and is not proven by RMS. Three frames do not establish that an edit holds throughout an entire clip. Model text reading and intent interpretation remain fallible.

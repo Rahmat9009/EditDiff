@@ -4,7 +4,7 @@ import { VerdictBadge } from "./VerdictBadge";
 
 const STEPS = [
   { n: "01", title: "Paste the revision notes", body: "The exact list you sent your editor, one request per line." },
-  { n: "02", title: "Drop both exports", body: "Previous cut and revised cut. Nothing leaves your machine but the two files." },
+  { n: "02", title: "Drop both exports", body: "Previous cut and revised cut, checked against your revision notes." },
   { n: "03", title: "Read the evidence ledger", body: "Every request gets a verdict, a timestamp and before/after proof." },
 ];
 
@@ -25,7 +25,7 @@ export function Hero() {
             timing evidence behind each verdict.
           </p>
           <p className="hero__meta">
-            Deterministic audio &amp; visual signals · No guessing · Evidence you can send to a client
+            Audio &amp; visual signals · Optional semantic checks · Inspectable evidence
           </p>
         </div>
         <div className="hero__signal" aria-hidden="true">
