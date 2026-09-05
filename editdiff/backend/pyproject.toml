@@ -1,0 +1,21 @@
+[project]
+name = "editdiff-api"
+version = "0.1.0"
+description = "Evidence-first revision verifier for video creators"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "uvicorn[standard]>=0.35,<1",
+  "python-multipart>=0.0.20,<1",
+  "pydantic>=2.11,<3",
+  "numpy>=2.2,<3",
+  "opencv-python-headless>=4.11,<5",
+  "google-genai>=1.33,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.4,<9", "httpx>=0.28,<1"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

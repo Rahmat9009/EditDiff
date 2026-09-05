@@ -1,0 +1,4 @@
+00:03 mute the background audio
+00:06 change the on-screen title
+00:09 punch in / crop tighter
+00:11 replace shot with b-roll
