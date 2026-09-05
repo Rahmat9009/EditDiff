@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -26,10 +27,26 @@ for directory in (UPLOADS, EVIDENCE, REPORTS):
     directory.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 250 * 1024 * 1024
 
+DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
+def get_cors_origins(raw: str | None = None) -> list[str]:
+    if raw is None:
+        raw = os.getenv("CORS_ORIGINS")
+    if raw is None:
+        return list(DEFAULT_CORS_ORIGINS)
+    origins = [item.strip() for item in raw.split(",") if item.strip()]
+    return origins if origins else list(DEFAULT_CORS_ORIGINS)
+
+
 app = FastAPI(title="EditDiff API", version="0.2.0")
-app.add_middleware(CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/evidence", StaticFiles(directory=EVIDENCE), name="evidence")
 
 

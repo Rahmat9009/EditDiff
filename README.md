@@ -30,6 +30,30 @@ npm run dev
 
 Open http://localhost:3000.
 
+## Production deployment (Vercel + Render)
+
+### Frontend (Vercel)
+
+Set the following environment variable in your Vercel project settings:
+
+```bash
+NEXT_PUBLIC_API_URL=https://editdiff.onrender.com
+```
+
+Never place secrets in `NEXT_PUBLIC_*` variables — they are bundled into the client application and visible to browsers.
+
+### Backend (Render)
+
+Deploy `backend/` as a Web Service on Render with:
+
+```bash
+PYTHON_VERSION=3.11.11
+CORS_ORIGINS=https://<your-vercel-domain>
+```
+
+- `CORS_ORIGINS`: Comma-separated list of allowed frontend origins (e.g. `https://editdiff.vercel.app` or `https://editdiff.vercel.app,https://preview-deployment.vercel.app`). Defaults locally to `http://localhost:3000,http://127.0.0.1:3000`.
+- `GEMINI_API_KEY`: *(Optional, server-side only)* Optional key for semantic inspection. The canonical golden demo does not require Gemini to produce its expected `2 PASS / 1 FAIL / 2 REVIEW` verdict count.
+
 ## Backend architecture and evidence
 
 FastAPI receives multipart uploads, validates media with ffprobe, and runs blocking media analysis in a worker thread. Notes become typed revision requests. FFmpeg extracts audio and JPEGs; OpenCV measures grayscale frame differences and ORB matches. A conservative decision layer combines those measurements with optional Gemini inspection.

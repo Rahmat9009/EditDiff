@@ -10,8 +10,8 @@ npm run build   # type-checks and builds
 ```
 
 The API base URL comes from `NEXT_PUBLIC_API_URL` (default
-`http://localhost:8000`). Nothing secret belongs in this package — every
-`NEXT_PUBLIC_*` value ships to the browser.
+`http://localhost:8000`, set to `https://editdiff.onrender.com` in production).
+Nothing secret belongs in this package — every `NEXT_PUBLIC_*` value ships to the browser.
 
 ## The 60-second demo path
 
