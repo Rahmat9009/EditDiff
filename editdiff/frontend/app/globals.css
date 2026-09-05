@@ -13,6 +13,9 @@
   --line: #d5d3c9;
   --line-strong: #b3b1a4;
   --stage: #0d0d0b;
+  /* The one surface lighter than --panel: where the user writes, and the
+     selected ledger row. Replaces the near-identical #fffdf7 / #fffdf4. */
+  --field: #fffdf7;
 
   --acid: #d7ff3f;
   --fail: #ff5b45;
@@ -135,13 +138,11 @@ figcaption,
 }
 
 .brand__mark {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--ink);
-  font: 700 11px var(--mono);
-  letter-spacing: 0.04em;
+  display: block;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  object-fit: contain;
 }
 
 .brand__name {
@@ -275,7 +276,7 @@ figcaption,
 }
 
 .verdict--pass { background: var(--acid); }
-.verdict--fail { background: var(--fail); color: #fff; border-color: var(--ink); }
+.verdict--fail { background: var(--fail); color: var(--ink); border-color: var(--ink); }
 .verdict--review { background: var(--review); }
 
 /* --------------------------------------------------------------- workspace */
@@ -458,7 +459,7 @@ figcaption,
   width: 100%;
   resize: vertical;
   border: 1px solid var(--line-strong);
-  background: #fffdf7;
+  background: var(--field);
   padding: 12px 14px;
   font: 13.5px/1.65 var(--mono);
   outline-offset: -2px;
@@ -1138,7 +1139,7 @@ figcaption,
 }
 
 .marker--pass { background: var(--acid); }
-.marker--fail { background: var(--fail); color: #fff; }
+.marker--fail { background: var(--fail); color: var(--ink); }
 .marker--review { background: var(--review); }
 
 .marker.is-selected {
@@ -1273,7 +1274,7 @@ figcaption,
 }
 
 .entry.is-selected {
-  background: #fffdf4;
+  background: var(--field);
   box-shadow: inset 4px 0 0 var(--ink);
 }
 
