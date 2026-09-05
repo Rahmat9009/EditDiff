@@ -1,4 +1,3 @@
-import { VERDICT_MEANING } from "../lib/format";
 import { VERDICTS, type Report, type Verdict } from "../lib/types";
 import { AnalysisStages } from "./AnalysisStages";
 import { VerdictBadge } from "./VerdictBadge";
@@ -25,17 +24,11 @@ export function StatusPanel({ busy, report }: Props) {
             <span />
             <span />
           </div>
-          <p>No audit yet.</p>
-          <dl className="legend legend--stack">
-            {VERDICTS.map((v) => (
-              <div key={v}>
-                <dt>
-                  <VerdictBadge verdict={v} size="sm" />
-                </dt>
-                <dd>{VERDICT_MEANING[v]}</dd>
-              </div>
-            ))}
-          </dl>
+          <p className="status__empty-lead">No audit yet.</p>
+          <p className="status__empty-note">
+            Every revision note becomes one checked line here, with a verdict, a timestamp and the
+            before/after evidence behind it.
+          </p>
         </div>
       ) : (
         <ScoreBody report={report} />
@@ -92,6 +85,9 @@ function ScoreBody({ report }: { report: Report }) {
         <p className="score__call score__call--fail">
           {fail} requested revision{fail === 1 ? "" : "s"} did not land. Send the ledger back to your
           editor.
+          {review > 0
+            ? ` ${review} more need${review === 1 ? "s" : ""} a human eye before you sign off.`
+            : ""}
         </p>
       ) : review > 0 ? (
         <p className="score__call">

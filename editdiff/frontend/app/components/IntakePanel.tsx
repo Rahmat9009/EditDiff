@@ -2,7 +2,6 @@
 
 import { useMemo } from "react";
 import { previewNotes } from "../lib/notes";
-import { timecode } from "../lib/format";
 import { DropZone, type MediaMeta, type MediaSlot } from "./DropZone";
 
 export const NOTES_PLACEHOLDER = "Add a timestamp and requested edit, one request per line.";
@@ -91,7 +90,7 @@ export function IntakePanel({
         <textarea
           id="revision-notes"
           value={notes}
-          rows={7}
+          rows={5}
           spellCheck={false}
           disabled={busy || demoBusy}
           placeholder={NOTES_PLACEHOLDER}
@@ -100,18 +99,8 @@ export function IntakePanel({
         />
         <p className="intake__help" id="notes-help">
           Start a line with a timestamp (<code>00:06</code> or <code>6s</code>) to pin the check to
-          that moment. Missing or out-of-range timestamps return REVIEW.
+          that moment. Untimed or out-of-range requests return REVIEW.
         </p>
-        {parsed.length > 0 ? (
-          <ul className="chips" aria-label="Parsed requests">
-            {parsed.slice(0, 6).map((p, i) => (
-              <li key={`${p.text}-${i}`}>
-                <span>{p.seconds === null ? "no ts" : timecode(p.seconds)}</span>
-                {p.text.replace(/^\s*(?:\d{1,2}:)?\d{1,2}:\d{2}(?:\.\d+)?\s*/, "")}
-              </li>
-            ))}
-          </ul>
-        ) : null}
       </div>
 
       <div className="intake__foot">

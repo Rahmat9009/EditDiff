@@ -42,7 +42,24 @@ export function EvidenceEntry({ result, index, selected, onSelect }: Props) {
       </h3>
 
       <div className="entry__body">
+        {request.expected_old_text || request.expected_new_text ? (
+          <p className="entry__target">
+            <span>Requested</span>
+            {request.expected_old_text ? <q>{request.expected_old_text}</q> : null}
+            {request.expected_old_text && request.expected_new_text ? (
+              <span aria-hidden="true">→</span>
+            ) : null}
+            {request.expected_new_text ? <q>{request.expected_new_text}</q> : null}
+          </p>
+        ) : null}
+
         <p className="entry__reason">{evidence.explanation}</p>
+
+        {verdict === "REVIEW" ? (
+          <p className="entry__stance">
+            Held for review: EditDiff will not record a pass the evidence does not support.
+          </p>
+        ) : null}
 
         {selected ? (
           <>

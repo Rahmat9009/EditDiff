@@ -53,6 +53,10 @@ export function ReportSection({
 
   const selected = report.results.find((r) => r.request.id === selectedId) ?? null;
   const visible = report.results.filter((r) => filter === "ALL" || r.verdict === filter);
+  const total = report.results.length;
+  const countOf = (v: Verdict) => Number(report.summary?.[v] ?? 0);
+  const spanStart = Math.min(...markers.map((m) => m.seconds));
+  const spanEnd = Math.max(...markers.map((m) => m.seconds));
 
   return (
     <section className="report" aria-labelledby="report-heading">
@@ -60,12 +64,30 @@ export function ReportSection({
         <div className="report__bar">
           <div className="report__identity">
             <span className="panel__index">03</span>
-            <h2 id="report-heading">Evidence ledger</h2>
-            <p>
-              Report <b>{report.report_id.toUpperCase()}</b> ·{" "}
-              {report.generated_at ? new Date(report.generated_at).toLocaleString() : "audit complete"}
-            </p>
+            <div>
+              <h2 id="report-heading">Evidence ledger</h2>
+              <p>
+                Report <b>{report.report_id.toUpperCase()}</b>
+                {report.generated_at ? ` · ${new Date(report.generated_at).toLocaleString()}` : ""}
+              </p>
+            </div>
           </div>
+
+          <ul className="report__tally" aria-label="Verdict summary">
+            <li>
+              <b>{total}</b>
+              <span className="report__tally-label">
+                requested revision{total === 1 ? "" : "s"}
+              </span>
+            </li>
+            {VERDICTS.map((v) => (
+              <li key={v}>
+                <b>{countOf(v)}</b>
+                <VerdictBadge verdict={v} size="sm" />
+              </li>
+            ))}
+          </ul>
+
           <p className="report__sources">
             <span>V1 {v1Name}</span>
             <span>V2 {v2Name}</span>
@@ -154,10 +176,10 @@ export function ReportSection({
           )}
 
           <p className="ledger__foot">
-            {report.results.length} requested revision{report.results.length === 1 ? "" : "s"} checked
-            across {timecode(Math.max(...markers.map((m) => m.seconds), 0))} of timeline.{" "}
+            {total} requested revision{total === 1 ? "" : "s"} checked between{" "}
+            {timecode(spanStart, spanStart % 1 !== 0)} and {timecode(spanEnd, spanEnd % 1 !== 0)}.{" "}
             <VerdictBadge verdict="REVIEW" size="sm" /> means the available evidence cannot
-            establish whether the requested edit landed — it will not fake a pass.
+            establish whether the requested edit landed — EditDiff records that instead of a pass.
           </p>
         </div>
       </div>

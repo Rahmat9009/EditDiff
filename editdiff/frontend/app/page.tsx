@@ -52,6 +52,24 @@ export default function Home() {
     return () => controller.abort();
   }, []);
 
+  /*
+   * Reveal a finished report only once it is committed to the DOM. Scrolling
+   * from inside the submit handler raced the commit and could land the page at
+   * the very bottom of the ledger.
+   */
+  const reportId = report?.report_id ?? null;
+  useEffect(() => {
+    if (!reportId) return;
+    const frame = window.requestAnimationFrame(() => {
+      const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      reportRef.current?.scrollIntoView({
+        behavior: still ? "auto" : "smooth",
+        block: "start",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [reportId]);
+
   const setFile = useCallback((role: "v1" | "v2", file: File | null) => {
     setReport(null);
     setSelectedId(null);
@@ -95,7 +113,8 @@ export default function Home() {
       const [blobA, blobB, demoNotes] = await Promise.all([a.blob(), b.blob(), noteFile.text()]);
       setFile("v1", new File([blobA], "demo-v1.mp4", { type: "video/mp4" }));
       setFile("v2", new File([blobB], "demo-v2.mp4", { type: "video/mp4" }));
-      setNotes(demoNotes);
+      /* Trailing newline would scroll the five demo requests out of view. */
+      setNotes(demoNotes.replace(/\s+$/, ""));
       setReport(null);
       setSelectedId(null);
     } catch (err) {
@@ -133,9 +152,6 @@ export default function Home() {
           setSeek({ time, nonce: nonce.current });
         }
       }
-      window.requestAnimationFrame(() =>
-        reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-      );
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
@@ -202,7 +218,7 @@ export default function Home() {
           <StatusPanel busy={busy} report={report} />
         </section>
 
-        <div ref={reportRef} />
+        <div ref={reportRef} className="report__anchor" />
         {report ? (
           <ReportSection
             report={report}
