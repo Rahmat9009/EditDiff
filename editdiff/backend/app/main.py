@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import re
 import shutil
+import subprocess
 import uuid
 from pathlib import Path
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from .models import AnalyzeResponse
+
+from .media import MediaError, probe_media
+from .models import AnalyzeResponse, RevisionRequest
 from .notes import parse_notes
 from .verifier import verify
 
@@ -14,17 +21,15 @@ BASE = Path(__file__).resolve().parent.parent
 DATA = BASE / ".data"
 UPLOADS = DATA / "uploads"
 EVIDENCE = DATA / "evidence"
-UPLOADS.mkdir(parents=True, exist_ok=True)
-EVIDENCE.mkdir(parents=True, exist_ok=True)
+REPORTS = DATA / "reports"
+for directory in (UPLOADS, EVIDENCE, REPORTS):
+    directory.mkdir(parents=True, exist_ok=True)
+MAX_UPLOAD_BYTES = 250 * 1024 * 1024
 
-app = FastAPI(title="EditDiff API", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
+app = FastAPI(title="EditDiff API", version="0.2.0")
+app.add_middleware(CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/evidence", StaticFiles(directory=EVIDENCE), name="evidence")
 
 
@@ -36,45 +41,79 @@ def health() -> dict[str, str]:
 async def _save(upload: UploadFile, destination: Path) -> None:
     if not upload.filename:
         raise HTTPException(400, "Missing filename")
-    with destination.open("wb") as f:
-        shutil.copyfileobj(upload.file, f)
+    size = 0
+    with destination.open("wb") as output:
+        while chunk := await upload.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                raise HTTPException(413, "Upload exceeds 250 MiB limit.")
+            output.write(chunk)
+    if size == 0:
+        raise HTTPException(400, "Empty upload")
+
+
+def _analyze_saved(requests: list[RevisionRequest], v1_path: Path, v2_path: Path, evidence_dir: Path) -> AnalyzeResponse:
+    probe_media(v1_path)
+    probe_media(v2_path)
+    results = [verify(req, v1_path, v2_path, evidence_dir) for req in requests]
+    summary = {"PASS": 0, "FAIL": 0, "REVIEW": 0}
+    for result in results:
+        summary[result.verdict.value] += 1
+    report = AnalyzeResponse(report_id=evidence_dir.name, summary=summary, results=results)
+    temporary = REPORTS / f"{report.report_id}.tmp"
+    temporary.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    temporary.replace(REPORTS / f"{report.report_id}.json")
+    return report
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(
-    v1: UploadFile = File(...),
-    v2: UploadFile = File(...),
-    notes: str = Form(...),
-) -> AnalyzeResponse:
+async def analyze(v1: UploadFile = File(...), v2: UploadFile = File(...), notes: str = Form(...)) -> AnalyzeResponse:
+    if len(notes) > 20000:
+        raise HTTPException(400, "Notes exceed 20,000 characters.")
     requests = parse_notes(notes)
-    if not requests:
-        raise HTTPException(400, "Add at least one revision note.")
-
+    if not requests or len(requests) > 30:
+        raise HTTPException(400, "Provide between 1 and 30 revision notes.")
     report_id = uuid.uuid4().hex[:12]
-    report_dir = UPLOADS / report_id
-    evidence_dir = EVIDENCE / report_id
-    report_dir.mkdir(parents=True, exist_ok=True)
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-
-    ext1 = Path(v1.filename or "v1.mp4").suffix or ".mp4"
-    ext2 = Path(v2.filename or "v2.mp4").suffix or ".mp4"
-    v1_path = report_dir / f"v1{ext1}"
-    v2_path = report_dir / f"v2{ext2}"
-    await _save(v1, v1_path)
-    await _save(v2, v2_path)
-
+    report_dir, evidence_dir = UPLOADS / report_id, EVIDENCE / report_id
+    report_dir.mkdir(parents=True, exist_ok=False)
+    evidence_dir.mkdir(parents=True, exist_ok=False)
+    completed = False
     try:
-        results = [verify(req, v1_path, v2_path, evidence_dir) for req in requests]
-    except Exception as exc:
-        raise HTTPException(422, f"Could not analyze uploaded media: {exc}") from exc
+        # Fixed names; client-supplied paths/extensions never become filesystem paths.
+        v1_path, v2_path = report_dir / "v1.media", report_dir / "v2.media"
+        await _save(v1, v1_path)
+        await _save(v2, v2_path)
+        report = await run_in_threadpool(_analyze_saved, requests, v1_path, v2_path, evidence_dir)
+        completed = True
+        return report
+    except (MediaError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(422, "Could not decode uploaded videos within supported media limits.") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(503, "Required media processing service is unavailable.") from exc
+    finally:
+        await v1.close()
+        await v2.close()
+        shutil.rmtree(report_dir)
+        if not completed:
+            shutil.rmtree(evidence_dir)
 
-    for result in results:
-        if result.evidence.v1_frame_path:
-            result.evidence.v1_frame_path = f"/evidence/{report_id}/{Path(result.evidence.v1_frame_path).name}"
-        if result.evidence.v2_frame_path:
-            result.evidence.v2_frame_path = f"/evidence/{report_id}/{Path(result.evidence.v2_frame_path).name}"
 
-    summary = {"PASS": 0, "FAIL": 0, "REVIEW": 0}
-    for r in results:
-        summary[r.verdict.value] += 1
-    return AnalyzeResponse(report_id=report_id, summary=summary, results=results)
+def _load_report(report_id: str) -> AnalyzeResponse:
+    if not re.fullmatch(r"[0-9a-f]{12}", report_id):
+        raise HTTPException(404, "Report not found")
+    path = REPORTS / f"{report_id}.json"
+    if not path.is_file():
+        raise HTTPException(404, "Report not found")
+    return AnalyzeResponse.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+@app.get("/reports/{report_id}", response_model=AnalyzeResponse)
+def get_report(report_id: str) -> AnalyzeResponse:
+    return _load_report(report_id)
+
+
+@app.get("/reports/{report_id}/export")
+def export_report(report_id: str) -> Response:
+    report = _load_report(report_id)
+    return Response(content=report.model_dump_json(indent=2), media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="editdiff-{report_id}.json"'})

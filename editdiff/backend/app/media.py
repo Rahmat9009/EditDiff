@@ -9,7 +9,31 @@ import numpy as np
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(args, check=True, capture_output=True)
+    return subprocess.run(args, check=True, capture_output=True, timeout=60)
+
+
+class MediaError(ValueError):
+    """Invalid or undecodable media (safe message supplied at API boundary)."""
+
+
+def probe_media(path: Path) -> dict:
+    data = json.loads(_run([
+        "ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)
+    ]).stdout)
+    try:
+        duration = float(data.get("format", {}).get("duration", 0))
+    except (TypeError, ValueError) as exc:
+        raise MediaError("Invalid media duration.") from exc
+    videos = [s for s in data.get("streams", []) if s.get("codec_type") == "video"]
+    if not videos or not math.isfinite(duration) or not 0.2 <= duration <= 1800:
+        raise MediaError("Video duration must be between 0.2 and 1800 seconds.")
+    if any(s.get("width", 0) * s.get("height", 0) > 3840 * 2160 for s in videos):
+        raise MediaError("Video exceeds supported resolution.")
+    return data
+
+
+def has_audio(path: Path) -> bool:
+    return any(s.get("codec_type") == "audio" for s in probe_media(path)["streams"])
 
 
 def duration_seconds(path: Path) -> float:
@@ -27,6 +51,8 @@ def extract_frame(path: Path, timestamp: float, out_path: Path) -> Path:
         "ffmpeg", "-y", "-ss", f"{max(timestamp, 0):.3f}", "-i", str(path),
         "-frames:v", "1", "-vf", "scale=960:-2", str(out_path)
     ])
+    if not out_path.is_file() or out_path.stat().st_size == 0:
+        raise MediaError("Frame extraction failed.")
     return out_path
 
 
@@ -36,7 +62,7 @@ def frame_gray(path: Path, timestamp: float) -> np.ndarray:
     ok, frame = cap.read()
     cap.release()
     if not ok or frame is None:
-        raise RuntimeError(f"Could not read frame at {timestamp}s from {path.name}")
+        raise MediaError("Could not decode requested frame.")
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return cv2.resize(gray, (480, 270), interpolation=cv2.INTER_AREA)
 
@@ -65,10 +91,20 @@ def audio_rms(path: Path, timestamp: float, window: float = 1.5, sample_rate: in
         "ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{window:.3f}",
         "-i", str(path), "-vn", "-ac", "1", "-ar", str(sample_rate),
         "-f", "s16le", "pipe:1"
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=60)
     if not cp.stdout:
-        return 0.0
+        raise MediaError("No audio samples decoded in the requested window.")
     samples = np.frombuffer(cp.stdout, dtype=np.int16).astype(np.float32) / 32768.0
     if samples.size == 0:
-        return 0.0
+        raise MediaError("No audio samples decoded in the requested window.")
     return float(math.sqrt(float(np.mean(samples * samples))))
+
+
+def audio_envelope(path: Path, start: float, length: float, step: float = 0.1) -> np.ndarray:
+    """RMS bins, with incomplete final bins discarded rather than padded silent."""
+    cp = _run(["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
+               "-i", str(path), "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1"])
+    samples = np.frombuffer(cp.stdout, np.int16).astype(np.float32) / 32768
+    size = round(16000 * step)
+    samples = samples[:len(samples) // size * size]
+    return np.sqrt(np.mean(samples.reshape(-1, size) ** 2, axis=1)) if len(samples) else np.array([])
