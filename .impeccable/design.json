@@ -1,0 +1,493 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-05T13:15:19.101Z",
+  "title": "Design System: EditDiff",
+  "extensions": {
+    "colorMeta": {
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink Black",
+        "canonical": "#11110f",
+        "tonalRamp": [
+          "#262625",
+          "#444442",
+          "#61615f",
+          "#7e7e7d",
+          "#9b9b9a",
+          "#b8b8b7",
+          "#d5d5d5",
+          "#f2f2f2"
+        ]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "Soft Ink",
+        "canonical": "#34342e",
+        "tonalRamp": [
+          "#272722",
+          "#44443e",
+          "#61615c",
+          "#7e7e7a",
+          "#9b9b98",
+          "#b8b8b6",
+          "#d5d5d4",
+          "#f2f2f2"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "#6b6a62",
+        "tonalRamp": [
+          "#272623",
+          "#44443f",
+          "#62615a",
+          "#7f7e77",
+          "#9c9b96",
+          "#b9b8b4",
+          "#d5d5d3",
+          "#f2f2f2"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Warm Proof Paper",
+        "canonical": "#f2f1ec",
+        "tonalRamp": [
+          "#262625",
+          "#444342",
+          "#61615f",
+          "#7e7e7b",
+          "#9c9b98",
+          "#b9b8b4",
+          "#d6d5d1",
+          "#f3f2ee"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "#f8f7f2",
+        "tonalRamp": [
+          "#262625",
+          "#444342",
+          "#61615f",
+          "#7e7e7b",
+          "#9c9b98",
+          "#b9b8b4",
+          "#d6d5d1",
+          "#f3f2ed"
+        ]
+      },
+      "panel-sunk": {
+        "role": "neutral",
+        "displayName": "Sunk Panel",
+        "canonical": "#edece5",
+        "tonalRamp": [
+          "#262625",
+          "#444341",
+          "#61615e",
+          "#7e7e7a",
+          "#9c9b96",
+          "#b9b8b3",
+          "#d6d5cf",
+          "#f3f2ee"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "#d5d3c9",
+        "tonalRamp": [
+          "#272624",
+          "#444340",
+          "#62615c",
+          "#7f7e78",
+          "#9d9b94",
+          "#bab8af",
+          "#d7d5cc",
+          "#f3f2ef"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong Rule",
+        "canonical": "#b3b1a4",
+        "tonalRamp": [
+          "#272624",
+          "#44443f",
+          "#62615a",
+          "#7f7e75",
+          "#9d9b90",
+          "#bab8ad",
+          "#d6d5ce",
+          "#f3f2f0"
+        ]
+      },
+      "stage": {
+        "role": "neutral",
+        "displayName": "Stage Black",
+        "canonical": "#0d0d0b",
+        "tonalRamp": [
+          "#262625",
+          "#444442",
+          "#61615f",
+          "#7e7e7d",
+          "#9b9b9a",
+          "#b8b8b7",
+          "#d5d5d5",
+          "#f2f2f2"
+        ]
+      },
+      "field": {
+        "role": "neutral",
+        "displayName": "Field",
+        "canonical": "#fffdf7",
+        "tonalRamp": [
+          "#272625",
+          "#444342",
+          "#61615e",
+          "#7f7e7b",
+          "#9c9b97",
+          "#b9b8b4",
+          "#d7d5d0",
+          "#f4f2ed"
+        ]
+      },
+      "acid": {
+        "role": "primary",
+        "displayName": "Signal Acid",
+        "canonical": "#d7ff3f",
+        "tonalRamp": [
+          "#232a0a",
+          "#3e4a12",
+          "#596a1a",
+          "#748a22",
+          "#8faa2a",
+          "#aaca32",
+          "#c5ea3a",
+          "#e8ff92"
+        ]
+      },
+      "fail": {
+        "role": "secondary",
+        "displayName": "Reject Red",
+        "canonical": "#ff5b45",
+        "tonalRamp": [
+          "#4e1c15",
+          "#8a3125",
+          "#c64736",
+          "#ff5d47",
+          "#ff8170",
+          "#ffa69a",
+          "#ffcac3",
+          "#ffefed"
+        ]
+      },
+      "review": {
+        "role": "secondary",
+        "displayName": "Hold Amber",
+        "canonical": "#f2b134",
+        "tonalRamp": [
+          "#33250b",
+          "#5a4213",
+          "#815e1c",
+          "#a77a24",
+          "#ce972c",
+          "#f2b33a",
+          "#f8d28b",
+          "#fdf1dc"
+        ]
+      },
+      "brand-slate": {
+        "role": "brand",
+        "displayName": "Brand Slate",
+        "canonical": "#2c353c",
+        "tonalRamp": [
+          "#21272c",
+          "#3c454b",
+          "#5b6267",
+          "#797f83",
+          "#979c9f",
+          "#b5b8bb",
+          "#d4d5d7",
+          "#f2f2f3"
+        ]
+      },
+      "brand-green": {
+        "role": "brand",
+        "displayName": "Brand Green",
+        "canonical": "#bcc14d",
+        "tonalRamp": [
+          "#272810",
+          "#45471c",
+          "#636528",
+          "#818435",
+          "#9fa341",
+          "#bcc14e",
+          "#d8db97",
+          "#f3f4df"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The hero promise only. Serif, two lines, acid marker under the italic word."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The single large score numeral — how many revisions the evidence verified."
+      },
+      "figure": {
+        "displayName": "Figure",
+        "purpose": "Serif numerals at working size: confidence, header tally counts, filenames."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Panel and section landmarks. Sans, because a heading is not a finding."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Verdict reasoning and explanatory copy, capped at 68ch."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Micro uppercase voice for structural markers, captions and disclosure summaries."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "Machine values read digit by digit: timecodes, report IDs, check kinds."
+      }
+    },
+    "shadows": [
+      {
+        "name": "none",
+        "value": "none",
+        "purpose": "The system has no drop shadows. Depth is tonal layering plus 1px hairlines."
+      },
+      {
+        "name": "verdict-rule",
+        "value": "inset 4px 0 0 <verdict colour>",
+        "purpose": "Hard inset left rule encoding a ledger row verdict. Not elevation."
+      },
+      {
+        "name": "drag-ring",
+        "value": "inset 0 0 0 2px #11110f",
+        "purpose": "Drop zone drag-active ring, paired with a 26% acid fill."
+      },
+      {
+        "name": "marker-selected",
+        "value": "0 0 0 3px #11110f",
+        "purpose": "Solid selection ring on the active timeline marker. Unblurred."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state",
+        "value": "0.14s ease",
+        "purpose": "Button background, colour and transform on hover/active."
+      },
+      {
+        "name": "surface",
+        "value": "0.15s ease",
+        "purpose": "Drop zone fill, timeline marker lift and ring."
+      },
+      {
+        "name": "rise",
+        "value": "0.35–0.4s ease-out",
+        "purpose": "Results arriving: the report section and the score numeral."
+      },
+      {
+        "name": "sweep",
+        "value": "1.5s ease-in-out infinite",
+        "purpose": "Indeterminate analysis bar. Never implies a real percentage."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "0.001ms, iteration-count 1",
+        "purpose": "All animation and transition collapsed under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "short-laptop",
+        "value": "min-width: 1081px and max-height: 860px"
+      },
+      {
+        "name": "stack",
+        "value": "1080px"
+      },
+      {
+        "name": "mobile",
+        "value": "720px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Run revision audit. The one filled action on the intake surface.",
+      "html": "<button class=\"ds-btn-run\">Run revision audit <span aria-hidden=\"true\">&rarr;</span></button>",
+      "css": ".ds-btn-run{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid #11110f;background:#11110f;color:#f2f1ec;padding:14px 22px;font:700 13px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;border-radius:0;cursor:pointer;transition:background .14s ease,color .14s ease,transform .14s ease}.ds-btn-run:hover{background:#d7ff3f;color:#11110f}.ds-btn-run:focus-visible{outline:2px solid #11110f;outline-offset:2px}"
+    },
+    {
+      "name": "Default Button",
+      "kind": "button",
+      "refersTo": "button-default",
+      "description": "Ghost action used for Load demo, Print / PDF, Export audit and Replace.",
+      "html": "<button class=\"ds-btn\">Export audit</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid #11110f;background:#f8f7f2;color:#11110f;padding:9px 14px;font:700 12px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.05em;border-radius:0;cursor:pointer;transition:background .14s ease,color .14s ease}.ds-btn:hover{background:#d7ff3f}.ds-btn:focus-visible{outline:2px solid #11110f;outline-offset:2px}"
+    },
+    {
+      "name": "Verdict Badge — PASS",
+      "kind": "chip",
+      "refersTo": "verdict-pass",
+      "description": "Evidence supports the requested revision. Glyph plus word; never colour alone.",
+      "html": "<span class=\"ds-verdict ds-verdict-pass\"><span class=\"ds-verdict-glyph\" aria-hidden=\"true\">&#10003;</span>PASS</span>",
+      "css": ".ds-verdict{display:inline-flex;align-items:center;gap:6px;border:1px solid #11110f;padding:5px 9px;font:800 11px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.09em;border-radius:0;white-space:nowrap}.ds-verdict-glyph{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}.ds-verdict-pass{background:#d7ff3f;color:#11110f}"
+    },
+    {
+      "name": "Verdict Badge — FAIL",
+      "kind": "chip",
+      "refersTo": "verdict-fail",
+      "description": "Evidence contradicts the requested revision. Ink on Reject Red (6.15:1, WCAG AA); previously white at 3.07:1.",
+      "html": "<span class=\"ds-verdict ds-verdict-fail\"><span class=\"ds-verdict-glyph\" aria-hidden=\"true\">&#10005;</span>FAIL</span>",
+      "css": ".ds-verdict{display:inline-flex;align-items:center;gap:6px;border:1px solid #11110f;padding:5px 9px;font:800 11px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.09em;border-radius:0;white-space:nowrap}.ds-verdict-glyph{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}.ds-verdict-fail{background:#ff5b45;color:#11110f;border-color:#11110f}"
+    },
+    {
+      "name": "Verdict Badge — REVIEW",
+      "kind": "chip",
+      "refersTo": "verdict-review",
+      "description": "Evidence cannot establish whether the edit landed. A standing decision, not an error.",
+      "html": "<span class=\"ds-verdict ds-verdict-review\"><span class=\"ds-verdict-glyph\" aria-hidden=\"true\">?</span>REVIEW</span>",
+      "css": ".ds-verdict{display:inline-flex;align-items:center;gap:6px;border:1px solid #11110f;padding:5px 9px;font:800 11px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.09em;border-radius:0;white-space:nowrap}.ds-verdict-glyph{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}.ds-verdict-review{background:#f2b134;color:#11110f}"
+    },
+    {
+      "name": "Filter Chip",
+      "kind": "chip",
+      "refersTo": "filter-chip",
+      "description": "Verdict filter above the ledger. Carries its own count; the active chip inverts to ink with an acid count.",
+      "html": "<div style=\"display:flex;gap:6px\"><button class=\"ds-filter ds-filter-active\">All <span>5</span></button><button class=\"ds-filter\">FAIL <span>1</span></button></div>",
+      "css": ".ds-filter{display:inline-flex;align-items:center;gap:7px;border:1px solid #b3b1a4;background:#f8f7f2;color:#11110f;padding:6px 10px;font:700 11px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.08em;border-radius:0;cursor:pointer}.ds-filter span{font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#6b6a62}.ds-filter-active{background:#11110f;color:#f2f1ec;border-color:#11110f}.ds-filter-active span{color:#d7ff3f}.ds-filter:focus-visible{outline:2px solid #11110f;outline-offset:2px}"
+    },
+    {
+      "name": "Revision Notes Field",
+      "kind": "input",
+      "refersTo": "input-notes",
+      "description": "The one place the user writes. Monospace so timestamped lines align; the Field ground marks it as an input.",
+      "html": "<label class=\"ds-notes-label\" for=\"ds-notes\">Revision notes &mdash; one request per line</label><textarea id=\"ds-notes\" class=\"ds-notes\" rows=\"4\" spellcheck=\"false\">00:01.5 mute the background audio\n00:04 Change the title from 'DRAFT CUT' to 'LAUNCH DAY'.\n00:08 Replace the B-roll with the city shot.</textarea>",
+      "css": ".ds-notes-label{display:block;margin-bottom:10px;font:700 10.5px/1.2 system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#11110f}.ds-notes{width:100%;box-sizing:border-box;resize:vertical;border:1px solid #b3b1a4;background:#fffdf7;color:#11110f;padding:12px 14px;font:13.5px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border-radius:0;outline-offset:-2px}.ds-notes:focus-visible{outline:2px solid #11110f;border-color:#11110f}"
+    },
+    {
+      "name": "Timeline Marker Rail",
+      "kind": "nav",
+      "refersTo": "timeline-marker",
+      "description": "Square verdict-coloured buttons pinned at each revision timestamp. The shape of the whole report is legible along the rail.",
+      "html": "<div class=\"ds-rail\"><button class=\"ds-marker ds-marker-pass\">&#10003;</button><button class=\"ds-marker ds-marker-review\">?</button><button class=\"ds-marker ds-marker-fail ds-marker-sel\">&#10005;</button><span class=\"ds-track\"></span></div>",
+      "css": ".ds-rail{display:flex;align-items:center;gap:26px;background:#f8f7f2;border:1px solid #d5d3c9;padding:12px 14px}.ds-marker{width:22px;height:22px;display:grid;place-items:center;border:1px solid #11110f;background:#f8f7f2;font:700 11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border-radius:0;padding:0;cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}.ds-marker-pass{background:#d7ff3f}.ds-marker-review{background:#f2b134}.ds-marker-fail{background:#ff5b45;color:#11110f}.ds-marker-sel{box-shadow:0 0 0 3px #11110f;transform:translateY(-1px)}.ds-marker:focus-visible{outline:2px solid #11110f;outline-offset:2px}.ds-track{flex:1;height:4px;background:#11110f;border:1px solid #11110f}"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "nav",
+      "refersTo": null,
+      "description": "Comparison mode and audio source. The active option inverts to ink on paper.",
+      "html": "<div class=\"ds-seg\"><span class=\"ds-seg-opt ds-seg-on\">Split</span><span class=\"ds-seg-opt\">Wipe</span></div>",
+      "css": ".ds-seg{display:inline-flex;border:1px solid #b3b1a4;border-radius:0}.ds-seg-opt{padding:7px 11px;font:700 11px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.07em;text-transform:uppercase;color:#6b6a62;cursor:pointer}.ds-seg-on{background:#11110f;color:#f2f1ec}"
+    },
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Every working container. Square, hairline-bordered, flat — no shadow, no radius.",
+      "html": "<section class=\"ds-panel\"><header class=\"ds-panel-head\"><span class=\"ds-panel-idx\">01</span><h2 class=\"ds-panel-title\">Intake</h2></header><div class=\"ds-panel-body\">Panel bodies carry 18px of padding and sit one tonal step above the page ground.</div></section>",
+      "css": ".ds-panel{border:1px solid #d5d3c9;background:#f8f7f2;border-radius:0}.ds-panel-head{display:flex;align-items:center;gap:14px;height:52px;padding:0 18px;border-bottom:1px solid #d5d3c9}.ds-panel-idx{font:700 11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid #d5d3c9;padding:5px 7px;color:#6b6a62}.ds-panel-title{margin:0;font:700 15px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:-.01em}.ds-panel-body{padding:18px;font:15px/1.5 system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;color:#34342e}"
+    },
+    {
+      "name": "Ledger Row",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "One checked revision: verdict rule on the left, request and reason in the middle, confidence figure in serif on the right.",
+      "html": "<article class=\"ds-entry\"><div class=\"ds-entry-head\"><span class=\"ds-entry-idx\">04</span><span class=\"ds-verdict ds-verdict-fail\"><span class=\"ds-verdict-glyph\" aria-hidden=\"true\">&#10005;</span>FAIL</span><span class=\"ds-entry-req\"><span class=\"ds-entry-text\">00:08 Replace the B-roll with the city shot.</span><span class=\"ds-entry-meta\">0:08 &middot; Visual check &middot; jump to proof</span></span><span class=\"ds-entry-conf\"><b>80%</b><span>Confidence</span></span></div><p class=\"ds-entry-reason\">The sampled V1/V2 frames are essentially unchanged throughout the evidence window; the requested visual revision is not visible.</p></article>",
+      "css": ".ds-verdict{display:inline-flex;align-items:center;gap:6px;border:1px solid #11110f;padding:5px 9px;font:800 11px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.09em;border-radius:0;white-space:nowrap}.ds-verdict-glyph{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}.ds-verdict-fail{background:#ff5b45;color:#11110f}.ds-entry{background:#f8f7f2;border:1px solid #d5d3c9;box-shadow:inset 4px 0 0 #ff5b45;border-radius:0}.ds-entry-head{display:grid;grid-template-columns:26px 92px minmax(0,1fr) auto;align-items:center;gap:14px;padding:16px}.ds-entry-idx{font:700 11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#6b6a62}.ds-entry-text{display:block;font:600 15px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;color:#11110f}.ds-entry-meta{display:block;margin-top:4px;font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#6b6a62;letter-spacing:.03em}.ds-entry-conf{text-align:right}.ds-entry-conf b{display:block;font:400 20px Georgia,\"Times New Roman\",serif;color:#11110f}.ds-entry-conf span{font:700 10.5px system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#6b6a62}.ds-entry-reason{margin:0;padding:0 16px 16px 68px;font:14px/1.55 system-ui,-apple-system,\"Segoe UI\",Helvetica,Arial,sans-serif;color:#34342e;max-width:68ch}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Cutting Room Ledger",
+    "overview": "EditDiff looks like the bound audit book kept beside an edit bay. Warm off-white paper carries the reasoning — requests, verdicts, measurements, timestamps — while the footage sits inside a near-black viewing stage cut into that paper. Paper is where you think; the stage is where you look. The system is flat, ruled, and rectangular: no drop shadows, no rounded cards, no decorative surfaces. Depth comes from four tonal steps of the same warm ground and from 1px hairlines. Typography does the ranking: a serif for anything that is a finding, a system sans for anything operable, a monospace for machine values. One acid yellow-green is the only saturated colour in the working interface and it is rationed to what is being examined or verified. Two further hues are reserved absolutely for verdict semantics.",
+    "keyCharacteristics": [
+      "Warm paper ground with a near-black viewing stage — two distinct worlds, never blended.",
+      "Zero border radius on every rectangle; circles only where a control is genuinely round.",
+      "Zero drop shadows. Depth is tonal layering plus 1px hairlines.",
+      "Serif for findings, sans for controls, mono for machine values.",
+      "One acid accent, rationed; two further hues locked to verdict meaning.",
+      "Evidence-led hierarchy: what was requested, what happened, why we say so."
+    ],
+    "rules": [
+      {
+        "name": "The Rationed Accent Rule",
+        "body": "Signal Acid marks what is being examined or verified — attention, active comparison, detected difference. It is never sprayed for energy. If a screen has acid in more than a few small places, one of them is decorative and should be removed.",
+        "section": "colors"
+      },
+      {
+        "name": "The Locked Hue Rule",
+        "body": "Reject Red and Hold Amber belong to FAIL and REVIEW exclusively. No error state, chart, tag, or illustration may borrow either. Their diagnostic value comes entirely from never appearing for any other reason.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Grounds Rule",
+        "body": "Reasoning lives on paper; footage lives on Stage Black. Never put a video on the paper ground, and never set body reasoning on the stage.",
+        "section": "colors"
+      },
+      {
+        "name": "The Findings-in-Serif Rule",
+        "body": "If a number or phrase is a result the system is asserting, it is set in the serif. If it is a control, a label, or a landmark, it is sans. A serif numeral in this product always means 'this is what we found.'",
+        "section": "typography"
+      },
+      {
+        "name": "The Wide-Micro Rule",
+        "body": "The 10.5px label voice is only legible because of 0.14em tracking and 700 weight. Never set it tighter, lighter, or in sentence case.",
+        "section": "typography"
+      },
+      {
+        "name": "The Fold Contract Rule",
+        "body": "On a 1440x900 laptop with the demo loaded, a judge must see both exports, the revision notes, and the Run control without scrolling. Any change that pushes the Run button below the fold at that size is a regression, not a style choice.",
+        "section": "layout"
+      },
+      {
+        "name": "The No-Shadow Rule",
+        "body": "A blurred, offset shadow has no place in this product. If an element needs separation, give it a hairline or move it one tonal step. box-shadow is permitted only as a hard, unblurred inset rule or selection ring.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Square Corner Rule",
+        "body": "Radius is 0 for every rectangle, without exception. Circles are reserved for round instrument parts. There is no middle radius in this system and none may be added.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do keep every rectangle at 0 radius and reserve 50% circles for genuinely round instrument parts (the crosshair, the status dot, the wipe handle).",
+      "Do convey depth with the four tonal ground steps and 1px hairlines, never with a blurred shadow.",
+      "Do ration Signal Acid to attention, active comparison, verification, and detected difference — the verified verdict, the active control, the current transport position.",
+      "Do pair every verdict with its monospace glyph and its word. Colour is never the only carrier.",
+      "Do present REVIEW as a standing decision: amber, deliberate, with a stance line. It is the product's spine, not a degraded state.",
+      "Do set findings in the serif and controls in the sans; put machine values in mono.",
+      "Do keep both exports, the notes, and the Run control above the fold at 1440x900.",
+      "Do state honestly when a capability is unavailable without naming it as an error or a failure.",
+      "Do keep motion functional: 0.14–0.15s state transitions, a 0.35–0.4s rise on results arriving, the indeterminate analysis sweep. Everything honours prefers-reduced-motion."
+    ],
+    "donts": [
+      "Don't introduce generic SaaS card grids, oversized pills, or any middle border radius. The square corner is the identity.",
+      "Don't use purple AI gradients, glassmorphism, chat UI, sparkles, or robot/brain imagery.",
+      "Don't add decorative dashboards, fake analytics, or charts that visualize nothing measured.",
+      "Don't use cyberpunk styling or neon-on-black surfaces. Stage Black is for footage only.",
+      "Don't borrow Reject Red or Hold Amber for any non-verdict purpose, and don't use Signal Acid as a large fill or a gradient.",
+      "Don't introduce Brand Slate (#2c353c) or Brand Green (#bcc14d) as interface tokens. They belong to the logo asset.",
+      "Don't add entrance animations, parallax, or any motion that delays the demo.",
+      "Don't present confidence as a probability or add accuracy claims — it is an uncalibrated evidence-strength score.",
+      "Don't describe the bundled demo footage as real client work, or add customer names, testimonials, or usage statistics."
+    ]
+  }
+}
