@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 import pytest
-from app import main
+from app import discovery, main
 from app.models import ChangeConfidence, ChangeKind, DiscoverResponse
 
 
@@ -79,7 +79,6 @@ def test_discover_shot_replacement(client, tmp_path):
     assert change["confidence"] in ("HIGH", "MEDIUM")
     ev = change["evidence"]
     assert ev["pre_final_frame_path"] and ev["final_frame_path"]
-    # Check that representative timestamp falls around the replaced interval
     assert 1.5 <= ev["final_timestamp_seconds"] <= 4.0
 
 
@@ -119,11 +118,18 @@ def test_discover_removed_segment(client, tmp_path):
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["summary"]["timing"] >= 1
-    # Critical requirement: later unchanged content (blue) is NOT falsely classified as changed!
     assert data["summary"]["visual"] == 0
     timing_change = next(c for c in data["changes"] if c["kind"] == "TIMING")
-    assert "segment_removed" in timing_change["evidence"]["reason_codes"]
+    assert "segment_removed_with_aligned_flanks" in timing_change["evidence"]["reason_codes"]
+    assert "temporal_anchor_verification" in timing_change["evidence"]["methods"]
     assert timing_change["confidence"] == "HIGH"
+    metrics_by_name = {m["name"]: m for m in timing_change["evidence"]["metrics"]}
+    assert "pre_flank_visual_distance" in metrics_by_name
+    assert "post_flank_visual_distance" in metrics_by_name
+    assert "offset_before_seconds" in metrics_by_name
+    assert "offset_after_seconds" in metrics_by_name
+    assert "inferred_timing_delta_seconds" in metrics_by_name
+    assert timing_change["evidence"]["explanation"].startswith("Approximately 1.5 seconds")
 
 
 def test_discover_inserted_segment(client, tmp_path):
@@ -164,7 +170,198 @@ def test_discover_inserted_segment(client, tmp_path):
     assert data["summary"]["timing"] >= 1
     assert data["summary"]["visual"] == 0
     timing_change = next(c for c in data["changes"] if c["kind"] == "TIMING")
-    assert "segment_inserted" in timing_change["evidence"]["reason_codes"]
+    assert "segment_inserted_with_aligned_flanks" in timing_change["evidence"]["reason_codes"]
+    assert "temporal_anchor_verification" in timing_change["evidence"]["methods"]
+    assert timing_change["confidence"] == "HIGH"
+    assert timing_change["evidence"]["explanation"].startswith("Approximately 1.5 seconds")
+
+
+def test_discover_adversarial_replacement_not_deletion_insertion(client, tmp_path):
+    """
+    Adversarial scenario: PRE: A | B | C | D | E, FINAL: A | B | X | D | E
+    where C and X have equal duration (1.5s) but different visuals.
+    Must produce a VISUAL change and NO high-confidence TIMING deletion/insertion pair.
+    """
+    # 5 scenes: 1s red, 1s green, 1.5s white, 1s blue, 1s black (total 5.5s)
+    v1 = tmp_path / "v1.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=red:s=320x240:d=1.0:r=10",
+        "-f", "lavfi", "-i", "color=c=green:s=320x240:d=1.0:r=10",
+        "-f", "lavfi", "-i", "color=c=white:s=320x240:d=1.5:r=10",
+        "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=1.0:r=10",
+        "-f", "lavfi", "-i", "color=c=black:s=320x240:d=1.0:r=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=5.5",
+        "-filter_complex", "[0:v][1:v][2:v][3:v][4:v]concat=n=5:v=1:a=0[outv]",
+        "-map", "[outv]", "-map", "5:a",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(v1),
+    ], check=True)
+
+    # V2: same except C (white) is replaced with X (yellow) of exact same 1.5s duration
+    v2 = tmp_path / "v2.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=red:s=320x240:d=1.0:r=10",
+        "-f", "lavfi", "-i", "color=c=green:s=320x240:d=1.0:r=10",
+        "-f", "lavfi", "-i", "color=c=yellow:s=320x240:d=1.5:r=10",
+        "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=1.0:r=10",
+        "-f", "lavfi", "-i", "color=c=black:s=320x240:d=1.0:r=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=5.5",
+        "-filter_complex", "[0:v][1:v][2:v][3:v][4:v]concat=n=5:v=1:a=0[outv]",
+        "-map", "[outv]", "-map", "5:a",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(v2),
+    ], check=True)
+
+    response = client.post(
+        "/discover",
+        files={
+            "pre_final": ("v1.mp4", v1.read_bytes(), "video/mp4"),
+            "final": ("v2.mp4", v2.read_bytes(), "video/mp4"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["summary"]["visual"] == 1
+    # Must NOT produce high-confidence timing deletion or insertion pair
+    high_timing = [c for c in data["changes"] if c["kind"] == "TIMING" and c["confidence"] == "HIGH"]
+    assert len(high_timing) == 0
+
+
+def test_discover_edge_timing_single_flank(client, tmp_path):
+    """
+    Edge edit: Delete 1.5s at the very beginning.
+    PRE: A (1.5s red) | B (2s blue)
+    FINAL: B (2s blue)
+    Pre-flank does not exist at t=0; only post-flank exists.
+    Must produce MEDIUM confidence and timing_change_single_flank.
+    """
+    v1 = tmp_path / "v1.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=red:s=320x240:d=1.5:r=10",
+        "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=2.0:r=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=3.5",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
+        "-map", "[outv]", "-map", "2:a",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(v1),
+    ], check=True)
+
+    v2 = _create_synthetic_video(tmp_path / "v2.mp4", duration=2.0, color="blue")
+
+    response = client.post(
+        "/discover",
+        files={
+            "pre_final": ("v1.mp4", v1.read_bytes(), "video/mp4"),
+            "final": ("v2.mp4", v2.read_bytes(), "video/mp4"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    timing_changes = [c for c in data["changes"] if c["kind"] == "TIMING"]
+    assert len(timing_changes) >= 1
+    edge_change = timing_changes[0]
+    assert edge_change["confidence"] == "MEDIUM"
+    assert "timing_change_single_flank" in edge_change["evidence"]["reason_codes"]
+    assert "temporal_anchor_verification" not in edge_change["evidence"]["methods"]
+
+
+def test_discover_audio_processing_failure_no_false_audio_change(client, tmp_path, monkeypatch):
+    """
+    Audio envelope/FFmpeg processing failure must become unavailable (None),
+    and must never trigger local_audio_muted / local_audio_added / local_audio_energy_shifted.
+    """
+    v1 = _create_synthetic_video(tmp_path / "v1.mp4", duration=4.0, color="blue")
+    v2 = _create_synthetic_video(tmp_path / "v2.mp4", duration=4.0, color="blue")
+
+    def failing_audio_envelope(*args, **kwargs):
+        raise RuntimeError("FFmpeg audio decode simulated failure")
+
+    monkeypatch.setattr(discovery, "audio_envelope", failing_audio_envelope)
+
+    response = client.post(
+        "/discover",
+        files={
+            "pre_final": ("v1.mp4", v1.read_bytes(), "video/mp4"),
+            "final": ("v2.mp4", v2.read_bytes(), "video/mp4"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    # Identical videos with audio envelope failure: zero false audio changes
+    assert data["summary"]["audio"] == 0
+    assert data["summary"]["total_changes"] == 0
+
+
+def test_discover_adaptive_band_large_cut(client, tmp_path):
+    """
+    Verify adaptive band handles cuts > 30 seconds (exceeding original 30s band)
+    without truncation or failure.
+    """
+    # 45s video: 5s red + 35s yellow + 5s blue
+    v1 = tmp_path / "v1.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=red:s=320x240:d=5.0:r=10",
+        "-f", "lavfi", "-i", "color=c=yellow:s=320x240:d=35.0:r=10",
+        "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=5.0:r=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=45.0",
+        "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[outv]",
+        "-map", "[outv]", "-map", "3:a",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(v1),
+    ], check=True)
+
+    # 10s video: 5s red + 5s blue (35s yellow segment removed!)
+    v2 = tmp_path / "v2.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=red:s=320x240:d=5.0:r=10",
+        "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=5.0:r=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=10.0",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
+        "-map", "[outv]", "-map", "2:a",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(v2),
+    ], check=True)
+
+    response = client.post(
+        "/discover",
+        files={
+            "pre_final": ("v1.mp4", v1.read_bytes(), "video/mp4"),
+            "final": ("v2.mp4", v2.read_bytes(), "video/mp4"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["summary"]["timing"] >= 1
+    assert data["summary"]["visual"] == 0
+    timing_change = next(c for c in data["changes"] if c["kind"] == "TIMING")
+    assert "segment_removed_with_aligned_flanks" in timing_change["evidence"]["reason_codes"]
+    assert timing_change["confidence"] == "HIGH"
+
+
+def test_discover_band_overflow_explicit_review(client, tmp_path, monkeypatch):
+    """
+    When timeline divergence exceeds the maximum supported alignment band (120s),
+    an explicit REVIEW change must be returned instead of silent truncation.
+    """
+    v1 = _create_synthetic_video(tmp_path / "v1.mp4", duration=3.0, color="blue")
+    v2 = _create_synthetic_video(tmp_path / "v2.mp4", duration=3.0, color="blue")
+
+    # Simulate a huge duration difference (> 115s)
+    monkeypatch.setattr(discovery, "duration_seconds", lambda p: 150.0 if "pre" in str(p).lower() else 5.0)
+
+    response = client.post(
+        "/discover",
+        files={
+            "pre_final": ("v1.mp4", v1.read_bytes(), "video/mp4"),
+            "final": ("v2.mp4", v2.read_bytes(), "video/mp4"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["summary"]["review"] >= 1
+    review_change = next(c for c in data["changes"] if c["kind"] == "REVIEW")
+    assert "timeline_divergence_exceeds_band" in review_change["evidence"]["reason_codes"]
+    assert review_change["confidence"] == "LOW"
 
 
 def test_discover_audio_mute(client, tmp_path):
@@ -308,4 +505,3 @@ def test_discover_canonical_demo_and_evidence_serving(client, sample):
                 img_res = client.get(path)
                 assert img_res.status_code == 200
                 assert img_res.headers["content-type"] == "image/jpeg"
-

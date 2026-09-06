@@ -35,6 +35,7 @@ VISUAL_HIGH_CONF_MIN = 0.07        # High confidence visual threshold
 VISUAL_ORB_MATCH_MAX = 0.40        # Maximum ORB match ratio for high confidence visual replacement
 NOISE_DIFF_MAX = 0.02              # Under this diff, considered encoding noise / negligible
 NOISE_ORB_MATCH_MIN = 0.70         # High feature match confirms encoding noise
+FLANK_VISUAL_MAX = 0.08            # Visual distance threshold for a stable matching flank
 
 AUDIO_ACTIVE_MIN = 0.008           # Minimum RMS to consider audio active
 AUDIO_SILENT_MAX = 0.004           # Maximum RMS to consider audio near-silent
@@ -44,7 +45,9 @@ AUDIO_SHIFT_RATIO = 0.60           # Energy shift ratio to trigger audio change
 DP_GAP_COST = 0.28                 # Penalty for insertion / deletion in DP alignment
 DP_SUB_CAP = 0.38                  # Cap on substitution distance in DP alignment
 MAX_SAMPLES = 1200                 # Maximum samples per video to bound memory/CPU
-MAX_BAND_SECONDS = 30.0            # Sakoe-Chiba band width in seconds
+MIN_BAND_SECONDS = 30.0            # Minimum Sakoe-Chiba band width in seconds
+SAFETY_MARGIN_SECONDS = 15.0       # Added to absolute duration delta for adaptive band
+MAX_BAND_CAP_SECONDS = 120.0       # Maximum supported cumulative drift / band width (memory bound)
 
 
 @dataclass
@@ -52,7 +55,7 @@ class VideoSample:
     index: int
     timestamp: float
     thumb: np.ndarray              # 32x18 normalized float32 grayscale
-    audio_rms: float
+    audio_rms: float | None        # None if audio unavailable or processing failed
 
 
 def visual_difference_at(path1: Path, t1: float, path2: Path, t2: float) -> tuple[float, float]:
@@ -75,18 +78,26 @@ def visual_difference_at(path1: Path, t1: float, path2: Path, t2: float) -> tupl
 
 
 def sample_video(path: Path, step: float) -> list[VideoSample]:
-    """Sample video deterministically at regular intervals with compact visual descriptors."""
+    """
+    Sample video deterministically at regular intervals with compact visual descriptors.
+    Audio measurement explicitly differentiates between known silence (no audio stream)
+    and processing failure (represented as None).
+    """
     dur = duration_seconds(path)
     if dur <= 0:
         return []
 
     # Audio envelope across full video (single ffmpeg pass)
     audio_env = None
-    if has_audio(path):
-        try:
+    audio_has_stream = False
+    audio_failed = False
+    try:
+        audio_has_stream = has_audio(path)
+        if audio_has_stream:
             audio_env = audio_envelope(path, 0, dur, step=0.1)
-        except Exception:
-            audio_env = None
+    except Exception:
+        audio_failed = True
+        audio_env = None
 
     cap = cv2.VideoCapture(str(path))
     samples: list[VideoSample] = []
@@ -96,18 +107,26 @@ def sample_video(path: Path, step: float) -> list[VideoSample]:
         cap.set(cv2.CAP_PROP_POS_MSEC, max(t, 0.0) * 1000.0)
         ok, frame = cap.read()
         if not ok or frame is None:
-            # If reading at the very end fails, break
             break
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         thumb = cv2.resize(gray, (32, 18), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
 
         # Local audio RMS from precomputed envelope
-        sample_audio = 0.0
-        if audio_env is not None and len(audio_env) > 0:
-            env_idx_start = max(0, int((t - step / 2) / 0.1))
-            env_idx_end = min(len(audio_env), int(math.ceil((t + step / 2) / 0.1)))
-            if env_idx_end > env_idx_start:
-                sample_audio = float(np.mean(audio_env[env_idx_start:env_idx_end]))
+        sample_audio: float | None = None
+        if audio_has_stream:
+            if audio_failed or audio_env is None:
+                # Audio stream exists but decoding/envelope failed -> unavailable
+                sample_audio = None
+            else:
+                env_idx_start = max(0, int((t - step / 2) / 0.1))
+                env_idx_end = min(len(audio_env), int(math.ceil((t + step / 2) / 0.1)))
+                if env_idx_end > env_idx_start:
+                    sample_audio = float(np.mean(audio_env[env_idx_start:env_idx_end]))
+                else:
+                    sample_audio = None
+        else:
+            # Video legitimately has no audio track -> known silent (0.0)
+            sample_audio = 0.0
 
         samples.append(VideoSample(index=idx, timestamp=round(t, 3), thumb=thumb, audio_rms=sample_audio))
         t += step
@@ -125,16 +144,22 @@ class AlignmentStep:
     t1: float | None
     t2: float | None
     d_vis: float
-    a1: float
-    a2: float
+    a1: float | None
+    a2: float | None
+
+
+@dataclass
+class AlignmentResult:
+    path: list[AlignmentStep]
+    band_overflow: bool
 
 
 def align_sequences_banded(
     s1: list[VideoSample],
     s2: list[VideoSample],
     step: float,
-    band_seconds: float = MAX_BAND_SECONDS,
-) -> list[AlignmentStep]:
+    band_seconds: float = MIN_BAND_SECONDS,
+) -> AlignmentResult:
     """
     Dynamic programming sequence alignment constrained by a Sakoe-Chiba band.
     Complexity: O(N * W) time and memory, where W is the band half-width.
@@ -142,17 +167,17 @@ def align_sequences_banded(
     n = len(s1)
     m = len(s2)
     if n == 0 and m == 0:
-        return []
+        return AlignmentResult([], False)
     if n == 0:
-        return [
+        return AlignmentResult([
             AlignmentStep("INSERT", None, j, None, s2[j].timestamp, 1.0, 0.0, s2[j].audio_rms)
             for j in range(m)
-        ]
+        ], False)
     if m == 0:
-        return [
+        return AlignmentResult([
             AlignmentStep("DELETE", i, None, s1[i].timestamp, None, 1.0, s1[i].audio_rms, 0.0)
             for i in range(n)
-        ]
+        ], False)
 
     w = max(5, int(math.ceil(band_seconds / step)))
     INF = 1e9
@@ -162,7 +187,6 @@ def align_sequences_banded(
     band_width = 2 * w + 1
     dp = np.full((n + 1, band_width), INF, dtype=np.float32)
     back_action = np.zeros((n + 1, band_width), dtype=np.int8)
-    # actions: 1=diag(match/sub), 2=del(s1 advance), 3=ins(s2 advance)
 
     # Base state: (0, 0) -> i=0, j=0 -> offset = w
     dp[0, w] = 0.0
@@ -178,7 +202,6 @@ def align_sequences_banded(
 
             # 1. Diagonal transition: (i -> i+1, j -> j+1)
             if i < n and j < m:
-                # offset in next row: (j+1) - (i+1) + w = j - i + w = k
                 d = float(np.mean(np.abs(s1[i].thumb - s2[j].thumb)))
                 cost = cur + min(d, DP_SUB_CAP)
                 if cost < dp[i + 1, k]:
@@ -187,7 +210,6 @@ def align_sequences_banded(
 
             # 2. Deletion in s1: (i -> i+1, j)
             if i < n:
-                # offset in next row: j - (i+1) + w = k - 1
                 next_k = k - 1
                 if 0 <= next_k < band_width:
                     cost = cur + DP_GAP_COST
@@ -197,7 +219,6 @@ def align_sequences_banded(
 
             # 3. Insertion in s2: (i, j -> j+1)
             if j < m:
-                # offset in same row: (j+1) - i + w = k + 1
                 next_k = k + 1
                 if 0 <= next_k < band_width:
                     cost = cur + DP_GAP_COST
@@ -208,8 +229,9 @@ def align_sequences_banded(
     # Traceback from (n, m)
     curr_i = n
     curr_k = (m - n) + w
+    band_overflow = False
     if curr_k < 0 or curr_k >= band_width or dp[curr_i, curr_k] >= INF:
-        # Fallback to closest valid cell at row n
+        band_overflow = True
         valid_ks = [k for k in range(band_width) if dp[n, k] < INF]
         if valid_ks:
             curr_k = min(valid_ks, key=lambda k: abs((n + k - w) - m))
@@ -250,7 +272,7 @@ def align_sequences_banded(
                 t2=s2[min(max(0, curr_j), m - 1)].timestamp if m > 0 else None,
                 d_vis=1.0,
                 a1=s1[prev_i].audio_rms,
-                a2=0.0,
+                a2=None,
             ))
             curr_i, curr_k = prev_i, prev_k
         elif act == 3:
@@ -264,16 +286,16 @@ def align_sequences_banded(
                 t1=s1[min(max(0, curr_i), n - 1)].timestamp if n > 0 else None,
                 t2=s2[prev_j].timestamp,
                 d_vis=1.0,
-                a1=0.0,
+                a1=None,
                 a2=s2[prev_j].audio_rms,
             ))
             curr_k = prev_k
         else:
-            # Reached beginning or boundary break
+            band_overflow = True
             break
 
     path.reverse()
-    return path
+    return AlignmentResult(path, band_overflow)
 
 
 @dataclass
@@ -283,18 +305,19 @@ class CandidateRegion:
     t1_end: float | None
     t2_start: float | None
     t2_end: float | None
+    start_step_idx: int
+    end_step_idx: int
     steps: list[AlignmentStep]
 
 
 def coalesce_candidate_regions(path: list[AlignmentStep], step: float) -> list[CandidateRegion]:
     """
     Coalesces consecutive alignment anomaly steps into candidate regions.
-    Bridges tiny single-step flickers.
+    Bridges tiny single-sample flickers and tracks index boundaries for flank inspection.
     """
     if not path:
         return []
 
-    # First, tag steps with tentative anomaly category
     tagged: list[str] = []
     for s in path:
         if s.kind == "DELETE":
@@ -304,30 +327,32 @@ def coalesce_candidate_regions(path: list[AlignmentStep], step: float) -> list[C
         elif s.kind == "REPLACE":
             tagged.append("VISUAL")
         elif s.kind == "MATCH":
-            # Check if there is an audio difference on visually matched frames
             a1, a2 = s.a1, s.a2
-            is_mute = (a1 >= AUDIO_ACTIVE_MIN and a2 <= AUDIO_SILENT_MAX and (a2 / max(a1, 1e-6)) <= AUDIO_MUTE_DROP_RATIO)
-            is_unmute = (a1 <= AUDIO_SILENT_MAX and a2 >= AUDIO_ACTIVE_MIN)
-            major_shift = (max(a1, a2) >= AUDIO_ACTIVE_MIN and abs(a1 - a2) / max(a1, a2) >= AUDIO_SHIFT_RATIO)
-            if is_mute or is_unmute or major_shift:
-                tagged.append("AUDIO")
+            # Audio change check: strictly requires available audio measurements on both sides
+            if a1 is not None and a2 is not None:
+                is_mute = (a1 >= AUDIO_ACTIVE_MIN and a2 <= AUDIO_SILENT_MAX and (a2 / max(a1, 1e-6)) <= AUDIO_MUTE_DROP_RATIO)
+                is_unmute = (a1 <= AUDIO_SILENT_MAX and a2 >= AUDIO_ACTIVE_MIN)
+                major_shift = (max(a1, a2) >= AUDIO_ACTIVE_MIN and abs(a1 - a2) / max(a1, a2) >= AUDIO_SHIFT_RATIO)
+                if is_mute or is_unmute or major_shift:
+                    tagged.append("AUDIO")
+                else:
+                    tagged.append("NONE")
             else:
                 tagged.append("NONE")
         else:
             tagged.append("NONE")
 
-    # Bridge single-sample isolated "NONE" between identical non-NONE tags
     smoothed = list(tagged)
     for i in range(1, len(smoothed) - 1):
         if smoothed[i] == "NONE" and smoothed[i - 1] == smoothed[i + 1] and smoothed[i - 1] != "NONE":
             smoothed[i] = smoothed[i - 1]
 
-    # Group consecutive identical tags
     regions: list[CandidateRegion] = []
     current_tag = "NONE"
     current_steps: list[AlignmentStep] = []
+    current_start_idx = 0
 
-    for tag, step_item in zip(smoothed, path):
+    for idx, (tag, step_item) in enumerate(zip(smoothed, path)):
         if tag != current_tag:
             if current_tag != "NONE" and current_steps:
                 t1s = [st.t1 for st in current_steps if st.t1 is not None]
@@ -338,9 +363,12 @@ def coalesce_candidate_regions(path: list[AlignmentStep], step: float) -> list[C
                     t1_end=max(t1s) if t1s else None,
                     t2_start=min(t2s) if t2s else None,
                     t2_end=max(t2s) if t2s else None,
+                    start_step_idx=current_start_idx,
+                    end_step_idx=idx - 1,
                     steps=current_steps,
                 ))
             current_tag = tag
+            current_start_idx = idx
             current_steps = [step_item] if tag != "NONE" else []
         else:
             if current_tag != "NONE":
@@ -355,6 +383,8 @@ def coalesce_candidate_regions(path: list[AlignmentStep], step: float) -> list[C
             t1_end=max(t1s) if t1s else None,
             t2_start=min(t2s) if t2s else None,
             t2_end=max(t2s) if t2s else None,
+            start_step_idx=current_start_idx,
+            end_step_idx=len(path) - 1,
             steps=current_steps,
         ))
 
@@ -363,6 +393,8 @@ def coalesce_candidate_regions(path: list[AlignmentStep], step: float) -> list[C
 
 def classify_and_verify_changes(
     regions: list[CandidateRegion],
+    alignment_path: list[AlignmentStep],
+    step: float,
     v1_path: Path,
     v2_path: Path,
     evidence_dir: Path,
@@ -370,7 +402,7 @@ def classify_and_verify_changes(
     d2: float,
 ) -> list[DetectedChange]:
     """
-    Confirms candidate regions using full frame extraction, deterministic measurements,
+    Confirms candidate regions using full frame extraction, deterministic flank verification,
     conservative reason codes, and creates evidence JPGs only for confirmed changes.
     """
     detected: list[DetectedChange] = []
@@ -379,20 +411,16 @@ def classify_and_verify_changes(
         change_id = f"change-{idx + 1:03d}"
 
         if reg.kind == "VISUAL":
-            # Representative midpoint
             t1_mid = (reg.t1_start + reg.t1_end) / 2 if (reg.t1_start is not None and reg.t1_end is not None) else (reg.t1_start or 0.0)
             t2_mid = (reg.t2_start + reg.t2_end) / 2 if (reg.t2_start is not None and reg.t2_end is not None) else (reg.t2_start or 0.0)
 
-            # High-resolution verification
             mean_abs, match_ratio = visual_difference_at(v1_path, t1_mid, v2_path, t2_mid)
 
-            # Check if this is merely compression/encoding noise
             if mean_abs <= NOISE_DIFF_MAX and match_ratio >= NOISE_ORB_MATCH_MIN:
                 continue
             if mean_abs < VISUAL_CHANGE_MIN:
                 continue
 
-            # Confirmed VISUAL change -> generate evidence frames
             p1_img = extract_frame(v1_path, t1_mid, evidence_dir / f"{change_id}-pre.jpg")
             p2_img = extract_frame(v2_path, t2_mid, evidence_dir / f"{change_id}-final.jpg")
 
@@ -431,89 +459,122 @@ def classify_and_verify_changes(
                 evidence=evidence,
             ))
 
-        elif reg.kind == "TIMING_DELETE":
-            # Material removed from pre_final
-            if reg.t1_start is None or reg.t1_end is None:
-                continue
-            removed_sec = max(0.0, reg.t1_end - reg.t1_start)
-            if removed_sec < 0.2:
-                # Negligible duration
+        elif reg.kind in ("TIMING_DELETE", "TIMING_INSERT"):
+            is_delete = (reg.kind == "TIMING_DELETE")
+
+            # Mathematically accurate gap duration from sampled count and step interval
+            gap_duration = round(len(reg.steps) * step, 3)
+            if gap_duration < 0.2:
                 continue
 
-            t1_mid = (reg.t1_start + reg.t1_end) / 2
-            # Anchor in final
-            final_anchor = reg.t2_start if reg.t2_start is not None else min(t1_mid, d2 - 0.05)
+            # Real Flank Verification
+            # Find nearest preceding and following MATCH steps in alignment_path
+            pre_flank = None
+            for k in range(reg.start_step_idx - 1, -1, -1):
+                if alignment_path[k].kind == "MATCH":
+                    pre_flank = alignment_path[k]
+                    break
 
-            p1_img = extract_frame(v1_path, t1_mid, evidence_dir / f"{change_id}-pre.jpg")
-            p2_img = extract_frame(v2_path, final_anchor, evidence_dir / f"{change_id}-final.jpg")
+            post_flank = None
+            for k in range(reg.end_step_idx + 1, len(alignment_path)):
+                if alignment_path[k].kind == "MATCH":
+                    post_flank = alignment_path[k]
+                    break
+
+            has_pre_flank = (pre_flank is not None and pre_flank.d_vis <= FLANK_VISUAL_MAX and pre_flank.t1 is not None and pre_flank.t2 is not None)
+            has_post_flank = (post_flank is not None and post_flank.d_vis <= FLANK_VISUAL_MAX and post_flank.t1 is not None and post_flank.t2 is not None)
+
+            offset_before = (pre_flank.t2 - pre_flank.t1) if has_pre_flank else None
+            offset_after = (post_flank.t2 - post_flank.t1) if has_post_flank else None
+            pre_vis_dist = round(pre_flank.d_vis, 4) if has_pre_flank else None
+            post_vis_dist = round(post_flank.d_vis, 4) if has_post_flank else None
+
+            inferred_timing_delta = None
+            offset_consistent = False
+            if offset_before is not None and offset_after is not None:
+                inferred_timing_delta = round(offset_after - offset_before, 3)
+                expected_delta = -gap_duration if is_delete else gap_duration
+                # Tolerance based on adaptive sample interval
+                tolerance = max(0.5, 1.5 * step)
+                offset_consistent = abs(inferred_timing_delta - expected_delta) <= tolerance
+
+            # Determine confidence, classification, and reason codes conservatively
+            methods = ["bounded_sequence_alignment"]
+            if has_pre_flank and has_post_flank and offset_consistent:
+                confidence = ChangeConfidence.HIGH
+                kind = ChangeKind.TIMING
+                methods.append("temporal_anchor_verification")
+                code = "segment_removed_with_aligned_flanks" if is_delete else "segment_inserted_with_aligned_flanks"
+            elif has_pre_flank or has_post_flank:
+                confidence = ChangeConfidence.MEDIUM
+                kind = ChangeKind.TIMING
+                code = "timing_change_single_flank"
+            else:
+                confidence = ChangeConfidence.LOW
+                kind = ChangeKind.REVIEW
+                code = "timing_alignment_ambiguous"
+
+            # Frame extraction
+            if is_delete:
+                t1_mid = (reg.t1_start + reg.t1_end) / 2 if (reg.t1_start is not None and reg.t1_end is not None) else 0.0
+                final_anchor = reg.t2_start if reg.t2_start is not None else min(t1_mid, d2 - 0.05)
+                p1_img = extract_frame(v1_path, t1_mid, evidence_dir / f"{change_id}-pre.jpg")
+                p2_img = extract_frame(v2_path, final_anchor, evidence_dir / f"{change_id}-final.jpg")
+                win_start_pre, win_end_pre = reg.t1_start, reg.t1_end
+                win_start_post, win_end_post = round(final_anchor, 3), round(final_anchor, 3)
+                ts_pre, ts_post = round(t1_mid, 3), round(final_anchor, 3)
+                action_text = "removed from"
+                dur_metric_name = "removed_duration_seconds"
+                dur_delta = -gap_duration
+            else:
+                t2_mid = (reg.t2_start + reg.t2_end) / 2 if (reg.t2_start is not None and reg.t2_end is not None) else 0.0
+                pre_anchor = reg.t1_start if reg.t1_start is not None else min(t2_mid, d1 - 0.05)
+                p1_img = extract_frame(v1_path, pre_anchor, evidence_dir / f"{change_id}-pre.jpg")
+                p2_img = extract_frame(v2_path, t2_mid, evidence_dir / f"{change_id}-final.jpg")
+                win_start_pre, win_end_pre = round(pre_anchor, 3), round(pre_anchor, 3)
+                win_start_post, win_end_post = reg.t2_start, reg.t2_end
+                ts_pre, ts_post = round(pre_anchor, 3), round(t2_mid, 3)
+                action_text = "inserted into"
+                dur_metric_name = "inserted_duration_seconds"
+                dur_delta = gap_duration
 
             metrics = [
-                EvidenceMetric(name="removed_duration_seconds", v1=round(removed_sec, 3), v2=0.0, delta=round(-removed_sec, 3), unit="seconds"),
+                EvidenceMetric(name=dur_metric_name, delta=round(dur_delta, 3), unit="seconds"),
+                EvidenceMetric(name="pre_flank_visual_distance", v2=pre_vis_dist, unit="0-1"),
+                EvidenceMetric(name="post_flank_visual_distance", v2=post_vis_dist, unit="0-1"),
+                EvidenceMetric(name="offset_before_seconds", delta=round(offset_before, 3) if offset_before is not None else None, unit="seconds"),
+                EvidenceMetric(name="offset_after_seconds", delta=round(offset_after, 3) if offset_after is not None else None, unit="seconds"),
+                EvidenceMetric(name="inferred_timing_delta_seconds", delta=round(inferred_timing_delta, 3) if inferred_timing_delta is not None else None, unit="seconds"),
             ]
 
+            if kind == ChangeKind.TIMING:
+                title = "TIMING CHANGE"
+                explanation = f"Approximately {gap_duration:.1f} seconds of material was {action_text} this region."
+            else:
+                title = "TIMING REVIEW"
+                explanation = "Timing discrepancy detected, but stable alignment anchors could not be verified on flanking footage."
+
             evidence = ChangeEvidence(
-                pre_final_timestamp_seconds=round(t1_mid, 3),
-                final_timestamp_seconds=round(final_anchor, 3),
-                window_start_pre_final=reg.t1_start,
-                window_end_pre_final=reg.t1_end,
-                window_start_final=round(final_anchor, 3),
-                window_end_final=round(final_anchor, 3),
+                pre_final_timestamp_seconds=ts_pre,
+                final_timestamp_seconds=ts_post,
+                window_start_pre_final=win_start_pre,
+                window_end_pre_final=win_end_pre,
+                window_start_final=win_start_post,
+                window_end_final=win_end_post,
                 pre_final_frame_path=f"/evidence/{evidence_dir.name}/{p1_img.name}",
                 final_frame_path=f"/evidence/{evidence_dir.name}/{p2_img.name}",
                 metrics=metrics,
-                methods=["bounded_sequence_alignment", "temporal_anchor_verification"],
-                reason_codes=["segment_removed"],
-                explanation=f"Approximately {removed_sec:.1f} seconds of material was removed from this region.",
+                methods=methods,
+                reason_codes=[code],
+                explanation=explanation,
             )
 
             detected.append(DetectedChange(
                 id=change_id,
-                kind=ChangeKind.TIMING,
-                confidence=ChangeConfidence.HIGH,
-                title="TIMING CHANGE",
-                description=f"Approximately {removed_sec:.1f} seconds of material was removed from this region.",
-                evidence=evidence,
-            ))
-
-        elif reg.kind == "TIMING_INSERT":
-            # Material inserted into final
-            if reg.t2_start is None or reg.t2_end is None:
-                continue
-            inserted_sec = max(0.0, reg.t2_end - reg.t2_start)
-            if inserted_sec < 0.2:
-                continue
-
-            t2_mid = (reg.t2_start + reg.t2_end) / 2
-            pre_anchor = reg.t1_start if reg.t1_start is not None else min(t2_mid, d1 - 0.05)
-
-            p1_img = extract_frame(v1_path, pre_anchor, evidence_dir / f"{change_id}-pre.jpg")
-            p2_img = extract_frame(v2_path, t2_mid, evidence_dir / f"{change_id}-final.jpg")
-
-            metrics = [
-                EvidenceMetric(name="inserted_duration_seconds", v1=0.0, v2=round(inserted_sec, 3), delta=round(inserted_sec, 3), unit="seconds"),
-            ]
-
-            evidence = ChangeEvidence(
-                pre_final_timestamp_seconds=round(pre_anchor, 3),
-                final_timestamp_seconds=round(t2_mid, 3),
-                window_start_pre_final=round(pre_anchor, 3),
-                window_end_pre_final=round(pre_anchor, 3),
-                window_start_final=reg.t2_start,
-                window_end_final=reg.t2_end,
-                pre_final_frame_path=f"/evidence/{evidence_dir.name}/{p1_img.name}",
-                final_frame_path=f"/evidence/{evidence_dir.name}/{p2_img.name}",
-                metrics=metrics,
-                methods=["bounded_sequence_alignment", "temporal_anchor_verification"],
-                reason_codes=["segment_inserted"],
-                explanation=f"Approximately {inserted_sec:.1f} seconds of material was inserted into this region.",
-            )
-
-            detected.append(DetectedChange(
-                id=change_id,
-                kind=ChangeKind.TIMING,
-                confidence=ChangeConfidence.HIGH,
-                title="TIMING CHANGE",
-                description=f"Approximately {inserted_sec:.1f} seconds of material was inserted into this region.",
+                kind=kind,
+                confidence=confidence,
+                title=title,
+                description=explanation,
                 evidence=evidence,
             ))
 
@@ -521,10 +582,23 @@ def classify_and_verify_changes(
             t1_mid = (reg.t1_start + reg.t1_end) / 2 if (reg.t1_start is not None and reg.t1_end is not None) else (reg.t1_start or 0.0)
             t2_mid = (reg.t2_start + reg.t2_end) / 2 if (reg.t2_start is not None and reg.t2_end is not None) else (reg.t2_start or 0.0)
 
-            # Measure accurate RMS in the window
             win = max(0.5, (reg.t1_end or t1_mid) - (reg.t1_start or t1_mid))
-            a1 = audio_rms(v1_path, t1_mid, window=win) if has_audio(v1_path) else 0.0
-            a2 = audio_rms(v2_path, t2_mid, window=win) if has_audio(v2_path) else 0.0
+
+            # Never interpret audio processing failure as silence
+            if not has_audio(v1_path) and not has_audio(v2_path):
+                continue
+            try:
+                a1 = audio_rms(v1_path, t1_mid, window=win) if has_audio(v1_path) else 0.0
+            except Exception:
+                a1 = None
+            try:
+                a2 = audio_rms(v2_path, t2_mid, window=win) if has_audio(v2_path) else 0.0
+            except Exception:
+                a2 = None
+
+            if a1 is None or a2 is None:
+                # Audio measurement unavailable -> never emit false audio changes
+                continue
 
             ratio = a2 / max(a1, 1e-6)
             drop_pct = round((1.0 - ratio) * 100.0)
@@ -543,7 +617,6 @@ def classify_and_verify_changes(
                 explanation = f"Final export audio energy is materially {shift_dir} in this aligned window."
                 conf = ChangeConfidence.MEDIUM
             else:
-                # Sub-threshold difference
                 continue
 
             p1_img = extract_frame(v1_path, t1_mid, evidence_dir / f"{change_id}-pre.jpg")
@@ -584,7 +657,7 @@ def classify_and_verify_changes(
 def discover_changes(pre_final_path: Path, final_path: Path, evidence_dir: Path) -> DiscoverResponse:
     """
     Main entry point for Discover Changes workflow.
-    Validates media, samples visual/audio descriptors, runs bounded DP alignment,
+    Validates media, samples visual/audio descriptors, runs bounded adaptive DP alignment,
     coalesces candidate change regions, and produces an evidence-first DiscoverResponse.
     """
     probe_media(pre_final_path)
@@ -592,24 +665,70 @@ def discover_changes(pre_final_path: Path, final_path: Path, evidence_dir: Path)
 
     d1 = duration_seconds(pre_final_path)
     d2 = duration_seconds(final_path)
+    duration_delta = abs(d1 - d2)
+
+    # Check for alignment band overflow: if duration delta exceeds maximum memory-bounded cap
+    if duration_delta > (MAX_BAND_CAP_SECONDS - 5.0):
+        # Explicit REVIEW change: timeline divergence exceeds automatic alignment limit
+        review_change = DetectedChange(
+            id="change-001",
+            kind=ChangeKind.REVIEW,
+            confidence=ChangeConfidence.LOW,
+            title="TIMELINE DIVERGENCE REVIEW",
+            description="The duration difference between video versions exceeds the maximum supported alignment band (120 seconds). Automatic alignment could not be completed reliably.",
+            evidence=ChangeEvidence(
+                explanation="Timeline divergence between pre-final and final exceeds the 120-second automatic alignment limit.",
+                methods=["bounded_sequence_alignment"],
+                reason_codes=["timeline_divergence_exceeds_band"],
+            ),
+        )
+        return DiscoverResponse(
+            report_id=evidence_dir.name,
+            pre_final_duration_seconds=round(d1, 3),
+            final_duration_seconds=round(d2, 3),
+            duration_delta_seconds=round(d2 - d1, 3),
+            summary=DiscoverSummary(total_changes=1, visual=0, timing=0, audio=0, text=0, review=1),
+            changes=[review_change],
+        )
 
     # Adaptive sample interval (0.5s for normal videos; scaled up for very long videos to bound to MAX_SAMPLES)
     max_dur = max(d1, d2)
     step = 0.5 if max_dur <= 300.0 else max(0.5, max_dur / 600.0)
 
+    # Adaptive band: max(MIN_BAND_SECONDS, duration_delta + SAFETY_MARGIN_SECONDS), capped at MAX_BAND_CAP_SECONDS
+    band_seconds = min(MAX_BAND_CAP_SECONDS, max(MIN_BAND_SECONDS, duration_delta + SAFETY_MARGIN_SECONDS))
+
     s1 = sample_video(pre_final_path, step=step)
     s2 = sample_video(final_path, step=step)
 
-    alignment_path = align_sequences_banded(s1, s2, step=step)
-    candidate_regions = coalesce_candidate_regions(alignment_path, step=step)
+    alignment = align_sequences_banded(s1, s2, step=step, band_seconds=band_seconds)
+    candidate_regions = coalesce_candidate_regions(alignment.path, step=step)
     changes = classify_and_verify_changes(
         candidate_regions,
-        pre_final_path,
-        final_path,
-        evidence_dir,
+        alignment.path,
+        step=step,
+        v1_path=pre_final_path,
+        v2_path=final_path,
+        evidence_dir=evidence_dir,
         d1=d1,
         d2=d2,
     )
+
+    # If alignment hit boundary overflow during traceback, append an explicit REVIEW change
+    if alignment.band_overflow:
+        overflow_change = DetectedChange(
+            id=f"change-{len(changes) + 1:03d}",
+            kind=ChangeKind.REVIEW,
+            confidence=ChangeConfidence.LOW,
+            title="TIMELINE ALIGNMENT REVIEW",
+            description="Timeline divergence approached the boundary of the automatic alignment band; tail footage may be partially unverified.",
+            evidence=ChangeEvidence(
+                explanation="Alignment path encountered the temporal search boundary.",
+                methods=["bounded_sequence_alignment"],
+                reason_codes=["alignment_band_boundary_encountered"],
+            ),
+        )
+        changes.append(overflow_change)
 
     summary = DiscoverSummary(
         total_changes=len(changes),
