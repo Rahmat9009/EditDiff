@@ -14,7 +14,7 @@ def no_live_semantics(monkeypatch):
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    for name in ('UPLOADS', 'EVIDENCE', 'REPORTS'):
+    for name in ('UPLOADS', 'EVIDENCE', 'REPORTS', 'DISCOVER_REPORTS'):
         path = tmp_path / name.lower()
         path.mkdir()
         monkeypatch.setattr(main, name, path)

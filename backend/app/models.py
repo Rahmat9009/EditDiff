@@ -76,3 +76,59 @@ class AnalyzeResponse(BaseModel):
     report_id: str
     summary: dict[str, int]
     results: list[VerificationResult]
+
+
+class ChangeKind(str, Enum):
+    VISUAL = "VISUAL"
+    TIMING = "TIMING"
+    AUDIO = "AUDIO"
+    TEXT = "TEXT"
+    REVIEW = "REVIEW"
+
+
+class ChangeConfidence(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class ChangeEvidence(BaseModel):
+    pre_final_timestamp_seconds: float | None = None
+    final_timestamp_seconds: float | None = None
+    window_start_pre_final: float | None = None
+    window_end_pre_final: float | None = None
+    window_start_final: float | None = None
+    window_end_final: float | None = None
+    pre_final_frame_path: str | None = None
+    final_frame_path: str | None = None
+    metrics: list[EvidenceMetric] = Field(default_factory=list)
+    methods: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+    explanation: str
+
+
+class DetectedChange(BaseModel):
+    id: str
+    kind: ChangeKind
+    confidence: ChangeConfidence
+    title: str
+    description: str
+    evidence: ChangeEvidence
+
+
+class DiscoverSummary(BaseModel):
+    total_changes: int
+    visual: int
+    timing: int
+    audio: int
+    text: int
+    review: int
+
+
+class DiscoverResponse(BaseModel):
+    report_id: str
+    pre_final_duration_seconds: float
+    final_duration_seconds: float
+    duration_delta_seconds: float
+    summary: DiscoverSummary
+    changes: list[DetectedChange]
