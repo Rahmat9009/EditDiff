@@ -1,6 +1,3 @@
-"use client";
-
-import { useEffect, useState } from "react";
 import type { ChangeKind, DiscoverReport } from "../lib/types";
 import { ChangeKindBadge } from "./ChangeKindBadge";
 
@@ -8,13 +5,6 @@ type Props = {
   busy: boolean;
   report: DiscoverReport | null;
 };
-
-const DISCOVER_STAGES = [
-  "Aligning versions",
-  "Finding changes",
-  "Verifying evidence",
-  "Building ledger",
-];
 
 export function DiscoverStatusPanel({ busy, report }: Props) {
   return (
@@ -25,7 +15,7 @@ export function DiscoverStatusPanel({ busy, report }: Props) {
       </div>
 
       {busy ? (
-        <DiscoverStages />
+        <DiscoverBusy />
       ) : !report ? (
         <div className="status__empty">
           <div className="status__target" aria-hidden="true">
@@ -45,32 +35,17 @@ export function DiscoverStatusPanel({ busy, report }: Props) {
   );
 }
 
-function DiscoverStages() {
-  const [active, setActive] = useState(0);
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setActive((i) => Math.min(i + 1, DISCOVER_STAGES.length - 1));
-    }, 1500);
-    return () => window.clearInterval(id);
-  }, []);
-
+function DiscoverBusy() {
   return (
-    <div className="stages" role="status" aria-live="polite">
+    <div className="stages stages--discover" role="status" aria-live="polite">
       <div className="stages__bar" aria-hidden="true">
         <span />
       </div>
-      <p className="stages__now">{DISCOVER_STAGES[active]}…</p>
-      <ol>
-        {DISCOVER_STAGES.map((stage, i) => (
-          <li key={stage} className={i < active ? "is-past" : i === active ? "is-active" : ""}>
-            <span className="stages__dot" aria-hidden="true" />
-            {stage}
-          </li>
-        ))}
-      </ol>
+      <p className="stages__now">ANALYZING VERSIONS</p>
       <p className="stages__note">
-        Stage timings are indicative. Discover completes once bounded sequence alignment and frame extraction finish.
+        Aligning timelines, measuring differences,
+        <br />
+        and building evidence…
       </p>
     </div>
   );

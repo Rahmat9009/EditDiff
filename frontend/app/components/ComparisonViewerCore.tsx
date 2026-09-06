@@ -17,6 +17,7 @@ export type ComparisonViewerCoreProps = {
   seek: { aTime: number; bTime: number; nonce: number } | null;
   caption?: ReactNode;
   emptyMessage?: string;
+  timelineSource?: "a" | "b";
 };
 
 type Mode = "split" | "wipe";
@@ -37,6 +38,7 @@ export function ComparisonViewerCore({
   seek,
   caption,
   emptyMessage = "Source files are no longer in memory. Re-select both exports to use the comparison view.",
+  timelineSource = "a",
 }: ComparisonViewerCoreProps) {
   const aRef = useRef<HTMLVideoElement>(null);
   const bRef = useRef<HTMLVideoElement>(null);
@@ -47,10 +49,12 @@ export function ComparisonViewerCore({
   const [wipe, setWipe] = useState(50);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [durationA, setDurationA] = useState(0);
+  const [durationB, setDurationB] = useState(0);
   const [mediaError, setMediaError] = useState(false);
 
-  // Offset lock between player B and player A: b.currentTime = a.currentTime + offsetRef.current
+  // Offset lock between player B and player A:
+  // final (B) = preFinal (A) + offsetRef.current  <=>  preFinal (A) = final (B) - offsetRef.current
   const offsetRef = useRef(0);
 
   const sync = useCallback(() => {
@@ -66,12 +70,22 @@ export function ComparisonViewerCore({
       b.pause();
       setPlaying(false);
     }
+    if (!a.paused && Number.isFinite(a.duration) && a.currentTime >= a.duration) {
+      a.pause();
+      b.pause();
+      setPlaying(false);
+    }
 
     if (Math.abs(b.currentTime - expectedB) > SYNC_TOLERANCE) {
       b.currentTime = Math.max(0, Math.min(expectedB, b.duration || expectedB));
     }
-    setCurrentTime(a.currentTime);
-  }, []);
+
+    if (timelineSource === "b") {
+      setCurrentTime(b.currentTime);
+    } else {
+      setCurrentTime(a.currentTime);
+    }
+  }, [timelineSource]);
 
   useEffect(() => {
     if (!playing) {
@@ -90,23 +104,27 @@ export function ComparisonViewerCore({
     };
   }, [playing, sync]);
 
-  const seekBoth = useCallback((aTarget: number, bTarget: number) => {
-    const a = aRef.current;
-    const b = bRef.current;
-    if (!a) return;
+  const seekBoth = useCallback(
+    (aTarget: number, bTarget: number) => {
+      const a = aRef.current;
+      const b = bRef.current;
+      if (!a) return;
 
-    const safeA = Math.max(0, Math.min(aTarget, a.duration || aTarget));
-    a.currentTime = safeA;
+      const safeA = Math.max(0, Math.min(aTarget, a.duration || aTarget));
+      a.currentTime = safeA;
 
-    if (b) {
-      const safeB = Math.max(0, Math.min(bTarget, b.duration || bTarget));
-      b.currentTime = safeB;
-      offsetRef.current = safeB - safeA;
-    } else {
-      offsetRef.current = 0;
-    }
-    setCurrentTime(safeA);
-  }, []);
+      if (b) {
+        const safeB = Math.max(0, Math.min(bTarget, b.duration || bTarget));
+        b.currentTime = safeB;
+        offsetRef.current = safeB - safeA;
+        setCurrentTime(timelineSource === "b" ? safeB : safeA);
+      } else {
+        offsetRef.current = 0;
+        setCurrentTime(safeA);
+      }
+    },
+    [timelineSource],
+  );
 
   const seekNonce = seek?.nonce;
   const aTime = seek?.aTime;
@@ -128,10 +146,18 @@ export function ComparisonViewerCore({
     if (!a || !b) return;
 
     const offset = offsetRef.current;
-    if (a.currentTime >= a.duration - 0.05 || (a.currentTime + offset) >= b.duration - 0.05) {
-      seekBoth(0, Math.max(0, offset));
+    if (timelineSource === "b") {
+      if (b.currentTime >= (b.duration || 0) - 0.05 || (b.currentTime - offset) >= (a.duration || 0) - 0.05) {
+        seekBoth(Math.max(0, -offset), 0);
+        offsetRef.current = offset;
+      }
+      a.currentTime = Math.max(0, Math.min(b.currentTime - offset, a.duration || (b.currentTime - offset)));
+    } else {
+      if (a.currentTime >= (a.duration || 0) - 0.05 || (a.currentTime + offset) >= (b.duration || 0) - 0.05) {
+        seekBoth(0, Math.max(0, offset));
+      }
+      b.currentTime = Math.max(0, Math.min(a.currentTime + offset, b.duration || (a.currentTime + offset)));
     }
-    b.currentTime = Math.max(0, Math.min(a.currentTime + offset, b.duration || (a.currentTime + offset)));
 
     try {
       await Promise.all([a.play(), b.play()]);
@@ -140,7 +166,7 @@ export function ComparisonViewerCore({
       pause();
       setMediaError(true);
     }
-  }, [pause, seekBoth]);
+  }, [pause, seekBoth, timelineSource]);
 
   const toggle = useCallback(() => {
     if (playing) pause();
@@ -150,11 +176,21 @@ export function ComparisonViewerCore({
   const step = useCallback(
     (delta: number) => {
       pause();
-      const a = aRef.current;
-      const curA = a ? a.currentTime : currentTime;
-      seekBoth(curA + delta, curA + delta + offsetRef.current);
+      const offset = offsetRef.current;
+      if (timelineSource === "b") {
+        const b = bRef.current;
+        const curB = b ? b.currentTime : currentTime;
+        const targetB = curB + delta;
+        const targetA = targetB - offset;
+        seekBoth(targetA, targetB);
+        offsetRef.current = offset;
+      } else {
+        const a = aRef.current;
+        const curA = a ? a.currentTime : currentTime;
+        seekBoth(curA + delta, curA + delta + offset);
+      }
     },
-    [currentTime, pause, seekBoth],
+    [currentTime, pause, seekBoth, timelineSource],
   );
 
   if (!v1Url || !v2Url) {
@@ -175,7 +211,7 @@ export function ComparisonViewerCore({
             playsInline
             preload="metadata"
             muted={audioSource !== "v1"}
-            onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+            onLoadedMetadata={(e) => setDurationA(e.currentTarget.duration || 0)}
             onTimeUpdate={sync}
             onEnded={pause}
             onError={() => setMediaError(true)}
@@ -193,6 +229,7 @@ export function ComparisonViewerCore({
             playsInline
             preload="metadata"
             muted={audioSource !== "v2"}
+            onLoadedMetadata={(e) => setDurationB(e.currentTarget.duration || 0)}
             onEnded={pause}
             onError={() => setMediaError(true)}
           />
@@ -275,20 +312,26 @@ export function ComparisonViewerCore({
       </div>
 
       <TimelineRail
-        duration={duration}
+        duration={timelineSource === "b" ? (durationB || durationA) : (durationA || durationB)}
         currentTime={currentTime}
         markers={markers}
         selectedId={selectedId}
         onScrub={(t) => {
           pause();
-          seekBoth(t, t + offsetRef.current);
+          if (timelineSource === "b") {
+            const offset = offsetRef.current;
+            seekBoth(t - offset, t);
+            offsetRef.current = offset;
+          } else {
+            seekBoth(t, t + offsetRef.current);
+          }
         }}
         onSelect={onSelect}
       />
 
       {mediaError ? (
         <p className="viewer__warn" role="status">
-          This browser could not decode one of the exports. Verdicts and evidence frames are unaffected.
+          This browser could not decode one of the exports. The analysis report and extracted evidence are unaffected.
         </p>
       ) : null}
     </section>

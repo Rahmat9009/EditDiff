@@ -106,6 +106,7 @@ export function DiscoverComparisonViewer({
       v2Label="FINAL"
       v1AudioLabel="Hear Pre-final"
       v2AudioLabel="Hear Final"
+      timelineSource="b"
       markers={viewerMarkers}
       selectedId={selectedId}
       onSelect={onSelect}

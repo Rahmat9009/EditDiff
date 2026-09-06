@@ -265,7 +265,7 @@ export function ComparisonViewer({
 
       {mediaError ? (
         <p className="viewer__warn" role="status">
-          This browser could not decode one of the exports. Verdicts and evidence frames are
+          This browser could not decode one of the exports. The analysis report and extracted evidence are
           unaffected.
         </p>
       ) : null}
