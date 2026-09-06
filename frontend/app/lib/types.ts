@@ -119,3 +119,83 @@ export function semanticOf(evidence: Evidence): SemanticEvidence | null {
   const hasContent = Object.values(raw).some((v) => v !== null && v !== undefined && v !== "");
   return hasContent ? raw : null;
 }
+
+/* --------------------------------------------------------------------------
+   Discover Changes Types (Workflow 2)
+   -------------------------------------------------------------------------- */
+
+export type ChangeKind = "VISUAL" | "TIMING" | "AUDIO" | "TEXT" | "REVIEW";
+
+export const CHANGE_KINDS: ChangeKind[] = ["VISUAL", "TIMING", "AUDIO", "TEXT", "REVIEW"];
+
+export type ChangeConfidence = "HIGH" | "MEDIUM" | "LOW";
+
+export type ChangeEvidence = {
+  pre_final_timestamp_seconds?: number | null;
+  final_timestamp_seconds?: number | null;
+  window_start_pre_final?: number | null;
+  window_end_pre_final?: number | null;
+  window_start_final?: number | null;
+  window_end_final?: number | null;
+  pre_final_frame_path?: string | null;
+  final_frame_path?: string | null;
+  metrics: Metric[];
+  methods?: string[];
+  reason_codes?: string[];
+  explanation: string;
+};
+
+export type DetectedChange = {
+  id: string;
+  kind: ChangeKind;
+  confidence: ChangeConfidence;
+  title: string;
+  description: string;
+  evidence: ChangeEvidence;
+};
+
+export type DiscoverSummary = {
+  total_changes: number;
+  visual: number;
+  timing: number;
+  audio: number;
+  text: number;
+  review: number;
+};
+
+export type DiscoverReport = {
+  report_id: string;
+  pre_final_duration_seconds: number;
+  final_duration_seconds: number;
+  duration_delta_seconds: number;
+  summary: DiscoverSummary;
+  changes: DetectedChange[];
+  generated_at?: string | null;
+  export_url?: string | null;
+};
+
+/** Runtime guard: a malformed Discover API response must not crash the UI. */
+export function isDiscoverReport(value: unknown): value is DiscoverReport {
+  if (!value || typeof value !== "object") return false;
+  const c = value as Partial<DiscoverReport>;
+  if (typeof c.report_id !== "string") return false;
+  if (typeof c.pre_final_duration_seconds !== "number") return false;
+  if (typeof c.final_duration_seconds !== "number") return false;
+  if (typeof c.duration_delta_seconds !== "number") return false;
+  if (!c.summary || typeof c.summary !== "object") return false;
+  if (typeof c.summary.total_changes !== "number") return false;
+  if (!Array.isArray(c.changes)) return false;
+  return c.changes.every(
+    (ch) =>
+      ch &&
+      typeof ch === "object" &&
+      typeof ch.id === "string" &&
+      typeof ch.kind === "string" &&
+      typeof ch.confidence === "string" &&
+      typeof ch.title === "string" &&
+      typeof ch.description === "string" &&
+      !!ch.evidence &&
+      typeof ch.evidence.explanation === "string" &&
+      Array.isArray(ch.evidence.metrics),
+  );
+}

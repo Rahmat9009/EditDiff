@@ -8,13 +8,12 @@ export function Hero() {
       <div className="shell hero__inner">
         <div className="hero__lead">
           <h1>
-            Prove every
+            Revision notes say what should have changed.
             <br />
-            <em>revision</em> landed.
+            EditDiff proves <em>what actually changed</em>.
           </h1>
           <p className="lede">
-            Send the revised export with the notes you gave your editor. EditDiff checks the cut
-            against those exact notes and returns a timestamped verdict with the evidence behind it.
+            Verify requested revisions or compare two exports to discover meaningful changes. EditDiff inspects both cuts and returns a timestamped ledger with the evidence behind it.
           </p>
         </div>
 

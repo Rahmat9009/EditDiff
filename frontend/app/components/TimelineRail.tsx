@@ -3,18 +3,24 @@
 import { timecode, VERDICT_GLYPH } from "../lib/format";
 import type { Verdict } from "../lib/types";
 
-export type Marker = {
+export type ViewerMarker = {
   id: string;
   seconds: number;
-  verdict: Verdict;
   label: string;
   index: number;
+  verdict?: Verdict;
+  tone?: string;
+  glyph?: string;
+  tooltip?: string;
+  accessibleText?: string;
 };
+
+export type Marker = ViewerMarker;
 
 type Props = {
   duration: number;
   currentTime: number;
-  markers: Marker[];
+  markers: ViewerMarker[];
   selectedId: string | null;
   onScrub: (seconds: number) => void;
   onSelect: (id: string) => void;
@@ -36,26 +42,37 @@ export function TimelineRail({
     <div className="rail">
       <div className="rail__markers">
         {safeDuration > 0
-          ? markers.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                className={`marker marker--${m.verdict.toLowerCase()}${
-                  selectedId === m.id ? " is-selected" : ""
-                }`}
-                style={{ left: pct(m.seconds) }}
-                onClick={() => onSelect(m.id)}
-                aria-pressed={selectedId === m.id}
-                title={`${timecode(m.seconds)} · ${m.verdict} · ${m.label}`}
-              >
-                <span className="marker__glyph" aria-hidden="true">
-                  {VERDICT_GLYPH[m.verdict]}
-                </span>
-                <span className="visually-hidden">
-                  Revision {m.index} at {timecode(m.seconds)}, {m.verdict}: {m.label}
-                </span>
-              </button>
-            ))
+          ? markers.map((m) => {
+              const tone = (m.tone ?? m.verdict ?? "review").toLowerCase();
+              const glyph = m.glyph ?? (m.verdict ? VERDICT_GLYPH[m.verdict] : "•");
+              const tooltip =
+                m.tooltip ??
+                (m.verdict
+                  ? `${timecode(m.seconds)} · ${m.verdict} · ${m.label}`
+                  : `${timecode(m.seconds)} · ${m.label}`);
+              const accessibleText =
+                m.accessibleText ??
+                (m.verdict
+                  ? `Revision ${m.index} at ${timecode(m.seconds)}, ${m.verdict}: ${m.label}`
+                  : `Change ${m.index} at ${timecode(m.seconds)}: ${m.label}`);
+
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`marker marker--${tone}${selectedId === m.id ? " is-selected" : ""}`}
+                  style={{ left: pct(m.seconds) }}
+                  onClick={() => onSelect(m.id)}
+                  aria-pressed={selectedId === m.id}
+                  title={tooltip}
+                >
+                  <span className="marker__glyph" aria-hidden="true">
+                    {glyph}
+                  </span>
+                  <span className="visually-hidden">{accessibleText}</span>
+                </button>
+              );
+            })
           : null}
       </div>
 
