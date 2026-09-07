@@ -14,7 +14,6 @@ from .media import (
     audio_rms,
     duration_seconds,
     extract_frame,
-    frame_gray,
     has_audio,
     probe_media,
 )
@@ -28,13 +27,30 @@ from .models import (
     EvidenceMetric,
 )
 
-# Deterministic threshold constants
-VISUAL_MATCH_THRESHOLD = 0.08      # L1 thumbnail distance below which frames match
-VISUAL_CHANGE_MIN = 0.04           # Minimum mean abs diff on full verification frame to confirm change
-VISUAL_HIGH_CONF_MIN = 0.07        # High confidence visual threshold
-VISUAL_ORB_MATCH_MAX = 0.40        # Maximum ORB match ratio for high confidence visual replacement
-NOISE_DIFF_MAX = 0.02              # Under this diff, considered encoding noise / negligible
-NOISE_ORB_MATCH_MIN = 0.70         # High feature match confirms encoding noise
+# Deterministic coarse-candidate thresholds (64x36 descriptors). These are set above
+# ordinary H.264 ringing while allowing a few materially changed tiles through.
+COARSE_GLOBAL_MIN = 0.055
+COARSE_MAX_TILE_MIN = 0.065
+COARSE_P95_TILE_MIN = 0.060
+COARSE_CHANGED_TILE_DIFF = 0.045
+COARSE_CHANGED_TILE_RATIO_MIN = 0.080
+COARSE_COLOR_MIN = 0.040
+
+# Deterministic verification thresholds (480x270 after a 3x3 Gaussian blur).
+PIXEL_DIFF_MIN = 20.0 / 255.0
+VERIFY_GLOBAL_MIN = 0.035
+VERIFY_MAX_TILE_MIN = 0.070
+VERIFY_CHANGED_PIXEL_RATIO_MIN = 0.004
+VERIFY_CHANGED_TILE_DIFF = 0.035
+VERIFY_COLOR_MIN = 0.030
+VERIFY_EDGE_MIN = 0.018
+VERY_STRONG_GLOBAL_MIN = 0.070
+VERY_STRONG_CHANGED_PIXEL_RATIO_MIN = 0.120
+VERY_STRONG_MAX_TILE_MIN = 0.140
+VERY_STRONG_LOCAL_AREA_MIN = 0.010
+VERY_STRONG_COLOR_MIN = 0.070
+VERY_STRONG_COLOR_AREA_MIN = 0.030
+MAX_VISUAL_VERIFICATION_PAIRS = 3
 FLANK_VISUAL_MAX = 0.08            # Visual distance threshold for a stable matching flank
 
 AUDIO_ACTIVE_MIN = 0.008           # Minimum RMS to consider audio active
@@ -54,16 +70,82 @@ MAX_BAND_CAP_SECONDS = 120.0       # Maximum supported cumulative drift / band w
 class VideoSample:
     index: int
     timestamp: float
-    thumb: np.ndarray              # 32x18 normalized float32 grayscale
+    thumb: np.ndarray              # 32x18 normalized float32 grayscale (alignment only)
+    visual_thumb: np.ndarray       # 64x36 normalized float32 BGR (candidate signals)
     audio_rms: float | None        # None if audio unavailable or processing failed
 
 
-def visual_difference_at(path1: Path, t1: float, path2: Path, t2: float) -> tuple[float, float]:
-    """Compute mean abs difference and ORB match ratio between frames at two arbitrary timestamps."""
-    a = frame_gray(path1, t1)
-    b = frame_gray(path2, t2)
-    diff = cv2.absdiff(a, b)
-    mean_abs = float(np.mean(diff) / 255.0)
+@dataclass
+class VisualMetrics:
+    global_mean_difference: float
+    changed_pixel_ratio: float
+    max_tile_difference: float
+    p95_tile_difference: float
+    changed_tile_ratio: float
+    color_difference: float
+    edge_change_ratio: float
+    orb_match_ratio: float
+    moderate: bool
+    very_strong: bool
+
+
+def _tile_metrics(diff: np.ndarray, threshold: float, rows: int = 6, cols: int = 8) -> tuple[float, float, float]:
+    tile_means = [
+        float(np.mean(tile))
+        for tile_row in np.array_split(diff, rows, axis=0)
+        for tile in np.array_split(tile_row, cols, axis=1)
+    ]
+    values = np.asarray(tile_means, dtype=np.float32)
+    return float(np.max(values)), float(np.percentile(values, 95)), float(np.mean(values >= threshold))
+
+
+def _coarse_visual_metrics(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float, float, float]:
+    gray_a = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY)
+    gray_b = cv2.cvtColor(b, cv2.COLOR_BGR2GRAY)
+    luma_diff = np.abs(gray_a - gray_b)
+    max_tile, p95_tile, changed_tile_ratio = _tile_metrics(luma_diff, COARSE_CHANGED_TILE_DIFF)
+    color_diff = float(np.mean(np.abs(a - b)))
+    return float(np.mean(luma_diff)), max_tile, p95_tile, changed_tile_ratio, color_diff
+
+
+def _is_visual_candidate(a: np.ndarray, b: np.ndarray) -> bool:
+    global_diff, max_tile, p95_tile, changed_tile_ratio, color_diff = _coarse_visual_metrics(a, b)
+    return (
+        global_diff >= COARSE_GLOBAL_MIN
+        or max_tile >= COARSE_MAX_TILE_MIN
+        or p95_tile >= COARSE_P95_TILE_MIN
+        or changed_tile_ratio >= COARSE_CHANGED_TILE_RATIO_MIN
+        or color_diff >= COARSE_COLOR_MIN
+    )
+
+
+def _read_verification_frame(path: Path, timestamp: float) -> np.ndarray:
+    cap = cv2.VideoCapture(str(path))
+    cap.set(cv2.CAP_PROP_POS_MSEC, max(timestamp, 0.0) * 1000.0)
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None:
+        raise MediaError("Unable to decode verification frame.")
+    return cv2.resize(frame, (480, 270), interpolation=cv2.INTER_AREA)
+
+
+def visual_metrics_at(path1: Path, t1: float, path2: Path, t2: float) -> VisualMetrics:
+    """Compute bounded, color-aware deterministic metrics for one aligned frame pair."""
+    a_color = cv2.GaussianBlur(_read_verification_frame(path1, t1), (3, 3), 0)
+    b_color = cv2.GaussianBlur(_read_verification_frame(path2, t2), (3, 3), 0)
+    a = cv2.cvtColor(a_color, cv2.COLOR_BGR2GRAY)
+    b = cv2.cvtColor(b_color, cv2.COLOR_BGR2GRAY)
+    diff = cv2.absdiff(a, b).astype(np.float32) / 255.0
+    mean_abs = float(np.mean(diff))
+    changed_pixel_ratio = float(np.mean(diff >= PIXEL_DIFF_MIN))
+    max_tile, p95_tile, changed_tile_ratio = _tile_metrics(diff, VERIFY_CHANGED_TILE_DIFF)
+
+    lab_a = cv2.cvtColor(a_color, cv2.COLOR_BGR2LAB).astype(np.float32) / 255.0
+    lab_b = cv2.cvtColor(b_color, cv2.COLOR_BGR2LAB).astype(np.float32) / 255.0
+    color_diff = float(np.mean(np.abs(lab_a - lab_b)))
+    edges_a = cv2.Canny(a, 70, 150) > 0
+    edges_b = cv2.Canny(b, 70, 150) > 0
+    edge_change_ratio = float(np.mean(np.logical_xor(edges_a, edges_b)))
 
     orb = cv2.ORB_create(nfeatures=800)
     k1, d1 = orb.detectAndCompute(a, None)
@@ -74,7 +156,29 @@ def visual_difference_at(path1: Path, t1: float, path2: Path, t2: float) -> tupl
         matches = matcher.match(d1, d2)
         good = [m for m in matches if m.distance < 45]
         match_ratio = len(good) / max(min(len(k1), len(k2)), 1)
-    return mean_abs, match_ratio
+    broad = mean_abs >= VERIFY_GLOBAL_MIN
+    localized = max_tile >= VERIFY_MAX_TILE_MIN and changed_pixel_ratio >= VERIFY_CHANGED_PIXEL_RATIO_MIN
+    color_change = color_diff >= VERIFY_COLOR_MIN and changed_pixel_ratio >= VERIFY_CHANGED_PIXEL_RATIO_MIN
+    structural = edge_change_ratio >= VERIFY_EDGE_MIN and changed_pixel_ratio >= VERIFY_CHANGED_PIXEL_RATIO_MIN
+    moderate = broad or localized or color_change or structural
+    very_strong = (
+        mean_abs >= VERY_STRONG_GLOBAL_MIN
+        or changed_pixel_ratio >= VERY_STRONG_CHANGED_PIXEL_RATIO_MIN
+        or (max_tile >= VERY_STRONG_MAX_TILE_MIN and changed_pixel_ratio >= VERY_STRONG_LOCAL_AREA_MIN)
+        or (color_diff >= VERY_STRONG_COLOR_MIN and changed_pixel_ratio >= VERY_STRONG_COLOR_AREA_MIN)
+    )
+    return VisualMetrics(
+        global_mean_difference=mean_abs,
+        changed_pixel_ratio=changed_pixel_ratio,
+        max_tile_difference=max_tile,
+        p95_tile_difference=p95_tile,
+        changed_tile_ratio=changed_tile_ratio,
+        color_difference=color_diff,
+        edge_change_ratio=edge_change_ratio,
+        orb_match_ratio=match_ratio,
+        moderate=moderate,
+        very_strong=very_strong,
+    )
 
 
 def sample_video(path: Path, step: float) -> list[VideoSample]:
@@ -110,6 +214,7 @@ def sample_video(path: Path, step: float) -> list[VideoSample]:
             break
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         thumb = cv2.resize(gray, (32, 18), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+        visual_thumb = cv2.resize(frame, (64, 36), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
 
         # Local audio RMS from precomputed envelope
         sample_audio: float | None = None
@@ -128,7 +233,13 @@ def sample_video(path: Path, step: float) -> list[VideoSample]:
             # Video legitimately has no audio track -> known silent (0.0)
             sample_audio = 0.0
 
-        samples.append(VideoSample(index=idx, timestamp=round(t, 3), thumb=thumb, audio_rms=sample_audio))
+        samples.append(VideoSample(
+            index=idx,
+            timestamp=round(t, 3),
+            thumb=thumb,
+            visual_thumb=visual_thumb,
+            audio_rms=sample_audio,
+        ))
         t += step
         idx += 1
 
@@ -248,7 +359,11 @@ def align_sequences_banded(
             prev_j = curr_j - 1
             prev_k = curr_k
             d = float(np.mean(np.abs(s1[prev_i].thumb - s2[prev_j].thumb)))
-            step_kind = "MATCH" if d < VISUAL_MATCH_THRESHOLD else "REPLACE"
+            step_kind = (
+                "REPLACE"
+                if _is_visual_candidate(s1[prev_i].visual_thumb, s2[prev_j].visual_thumb)
+                else "MATCH"
+            )
             path.append(AlignmentStep(
                 kind=step_kind,
                 i=prev_i,
@@ -411,33 +526,68 @@ def classify_and_verify_changes(
         change_id = f"change-{idx + 1:03d}"
 
         if reg.kind == "VISUAL":
-            t1_mid = (reg.t1_start + reg.t1_end) / 2 if (reg.t1_start is not None and reg.t1_end is not None) else (reg.t1_start or 0.0)
-            t2_mid = (reg.t2_start + reg.t2_end) / 2 if (reg.t2_start is not None and reg.t2_end is not None) else (reg.t2_start or 0.0)
-
-            mean_abs, match_ratio = visual_difference_at(v1_path, t1_mid, v2_path, t2_mid)
-
-            if mean_abs <= NOISE_DIFF_MAX and match_ratio >= NOISE_ORB_MATCH_MIN:
+            aligned_steps = [s for s in reg.steps if s.t1 is not None and s.t2 is not None]
+            if not aligned_steps:
                 continue
-            if mean_abs < VISUAL_CHANGE_MIN:
+            if len(aligned_steps) <= MAX_VISUAL_VERIFICATION_PAIRS:
+                selected_steps = aligned_steps
+            else:
+                selected_indices = sorted({0, (len(aligned_steps) - 1) // 2, len(aligned_steps) - 1})
+                selected_steps = [aligned_steps[i] for i in selected_indices]
+
+            verified = [
+                (step_item, visual_metrics_at(v1_path, step_item.t1, v2_path, step_item.t2))
+                for step_item in selected_steps
+            ]
+            supporting = [(step_item, values) for step_item, values in verified if values.moderate]
+            very_strong_count = sum(1 for _, values in verified if values.very_strong)
+            if very_strong_count == 0 and len(supporting) < 2:
                 continue
 
-            p1_img = extract_frame(v1_path, t1_mid, evidence_dir / f"{change_id}-pre.jpg")
-            p2_img = extract_frame(v2_path, t2_mid, evidence_dir / f"{change_id}-final.jpg")
+            strongest_step, strongest = max(
+                supporting,
+                key=lambda item: (
+                    item[1].very_strong,
+                    item[1].global_mean_difference,
+                    item[1].changed_pixel_ratio,
+                    item[1].max_tile_difference,
+                    item[1].color_difference,
+                    item[1].edge_change_ratio,
+                ),
+            )
+            t1_evidence = strongest_step.t1
+            t2_evidence = strongest_step.t2
+            p1_img = extract_frame(v1_path, t1_evidence, evidence_dir / f"{change_id}-pre.jpg")
+            p2_img = extract_frame(v2_path, t2_evidence, evidence_dir / f"{change_id}-final.jpg")
 
+            signal_count = sum((
+                strongest.global_mean_difference >= VERIFY_GLOBAL_MIN,
+                strongest.changed_pixel_ratio >= VERIFY_CHANGED_PIXEL_RATIO_MIN,
+                strongest.max_tile_difference >= VERIFY_MAX_TILE_MIN,
+                strongest.color_difference >= VERIFY_COLOR_MIN,
+                strongest.edge_change_ratio >= VERIFY_EDGE_MIN,
+            ))
             confidence = (
                 ChangeConfidence.HIGH
-                if (mean_abs >= VISUAL_HIGH_CONF_MIN and match_ratio <= VISUAL_ORB_MATCH_MAX)
+                if len(supporting) >= 2 and (very_strong_count >= 1 or signal_count >= 3)
                 else ChangeConfidence.MEDIUM
             )
 
             metrics = [
-                EvidenceMetric(name="mean_absolute_difference", v1=0.0, v2=round(mean_abs, 4), delta=round(mean_abs, 4), unit="0-1"),
-                EvidenceMetric(name="orb_match_ratio", v2=round(match_ratio, 4), unit="0-1"),
+                EvidenceMetric(name="global_mean_difference", v1=0.0, v2=round(strongest.global_mean_difference, 4), delta=round(strongest.global_mean_difference, 4), unit="0-1"),
+                EvidenceMetric(name="changed_pixel_ratio", v2=round(strongest.changed_pixel_ratio, 4), unit="0-1"),
+                EvidenceMetric(name="max_tile_difference", v2=round(strongest.max_tile_difference, 4), unit="0-1"),
+                EvidenceMetric(name="p95_tile_difference", v2=round(strongest.p95_tile_difference, 4), unit="0-1"),
+                EvidenceMetric(name="changed_tile_ratio", v2=round(strongest.changed_tile_ratio, 4), unit="0-1"),
+                EvidenceMetric(name="color_difference", v2=round(strongest.color_difference, 4), unit="0-1"),
+                EvidenceMetric(name="edge_change_ratio", v2=round(strongest.edge_change_ratio, 4), unit="0-1"),
+                EvidenceMetric(name="orb_match_ratio", v2=round(strongest.orb_match_ratio, 4), unit="0-1"),
+                EvidenceMetric(name="supporting_frame_count", v2=float(len(supporting)), unit="frames"),
             ]
 
             evidence = ChangeEvidence(
-                pre_final_timestamp_seconds=round(t1_mid, 3),
-                final_timestamp_seconds=round(t2_mid, 3),
+                pre_final_timestamp_seconds=round(t1_evidence, 3),
+                final_timestamp_seconds=round(t2_evidence, 3),
                 window_start_pre_final=reg.t1_start,
                 window_end_pre_final=reg.t1_end,
                 window_start_final=reg.t2_start,
@@ -445,7 +595,14 @@ def classify_and_verify_changes(
                 pre_final_frame_path=f"/evidence/{evidence_dir.name}/{p1_img.name}",
                 final_frame_path=f"/evidence/{evidence_dir.name}/{p2_img.name}",
                 metrics=metrics,
-                methods=["bounded_sequence_alignment", "mean_frame_difference", "orb_feature_match"],
+                methods=[
+                    "bounded_sequence_alignment",
+                    "localized_frame_difference",
+                    "color_difference",
+                    "edge_difference",
+                    "orb_feature_match",
+                    "multi_frame_verification",
+                ],
                 reason_codes=["aligned_visual_difference"],
                 explanation="The aligned visual content differs materially between versions.",
             )
@@ -691,9 +848,15 @@ def discover_changes(pre_final_path: Path, final_path: Path, evidence_dir: Path)
             changes=[review_change],
         )
 
-    # Adaptive sample interval (0.5s for normal videos; scaled up for very long videos to bound to MAX_SAMPLES)
+    # Short editor clips get quarter-second coverage. Longer videos stay bounded to
+    # at most MAX_SAMPLES without falling into frame-by-frame processing.
     max_dur = max(d1, d2)
-    step = 0.5 if max_dur <= 300.0 else max(0.5, max_dur / 600.0)
+    if max_dur <= 120.0:
+        step = 0.25
+    elif max_dur <= 300.0:
+        step = 0.5
+    else:
+        step = max(0.5, max_dur / MAX_SAMPLES)
 
     # Adaptive band: max(MIN_BAND_SECONDS, duration_delta + SAFETY_MARGIN_SECONDS), capped at MAX_BAND_CAP_SECONDS
     band_seconds = min(MAX_BAND_CAP_SECONDS, max(MIN_BAND_SECONDS, duration_delta + SAFETY_MARGIN_SECONDS))

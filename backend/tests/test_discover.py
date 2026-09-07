@@ -31,6 +31,68 @@ def _create_synthetic_video(
     return path
 
 
+def _create_pattern_video(path: Path, duration: float = 4.0, crf: int = 18) -> Path:
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y",
+        "-f", "lavfi", "-i", f"testsrc2=s=320x240:d={duration}:r=10",
+        "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf),
+        "-c:a", "aac", "-b:a", "128k", str(path),
+    ], check=True)
+    return path
+
+
+def _filtered_copy(source: Path, target: Path, video_filter: str, crf: int = 18) -> Path:
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-i", str(source),
+        "-vf", video_filter,
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf),
+        "-c:a", "copy", str(target),
+    ], check=True)
+    return target
+
+
+def _drawtext_font_filter() -> str:
+    candidates = (
+        Path("C:/Windows/Fonts/arial.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+    )
+    font_path = next(path for path in candidates if path.is_file())
+    escaped = str(font_path).replace("\\", "/").replace(":", "\\:")
+    return f"drawtext=fontfile='{escaped}':"
+
+
+def _discover_pair(client, v1: Path, v2: Path) -> dict:
+    response = client.post(
+        "/discover",
+        files={
+            "pre_final": ("v1.mp4", v1.read_bytes(), "video/mp4"),
+            "final": ("v2.mp4", v2.read_bytes(), "video/mp4"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _assert_one_visual(data: dict) -> None:
+    assert data["summary"]["visual"] == 1
+    assert data["summary"]["timing"] == 0
+    change = next(change for change in data["changes"] if change["kind"] == "VISUAL")
+    assert change["description"] == "The aligned visual content differs materially between versions."
+    metric_names = {metric["name"] for metric in change["evidence"]["metrics"]}
+    assert {
+        "global_mean_difference",
+        "changed_pixel_ratio",
+        "max_tile_difference",
+        "p95_tile_difference",
+        "color_difference",
+        "edge_change_ratio",
+        "orb_match_ratio",
+        "supporting_frame_count",
+    } <= metric_names
+    assert "multi_frame_verification" in change["evidence"]["methods"]
+
+
 def test_discover_identical_media_zero_changes(client, tmp_path):
     v1 = _create_synthetic_video(tmp_path / "v1.mp4", duration=3.0, color="blue")
     response = client.post(
@@ -80,6 +142,56 @@ def test_discover_shot_replacement(client, tmp_path):
     ev = change["evidence"]
     assert ev["pre_final_frame_path"] and ev["final_frame_path"]
     assert 1.5 <= ev["final_timestamp_seconds"] <= 4.0
+
+
+def test_discover_small_title_change(client, tmp_path):
+    source = _create_pattern_video(tmp_path / "source.mp4")
+    common = ":x=(w-text_w)/2:y=28:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.75"
+    font = _drawtext_font_filter()
+    v1 = _filtered_copy(source, tmp_path / "v1.mp4", font + "text='EXPORT V1'" + common)
+    v2 = _filtered_copy(source, tmp_path / "v2.mp4", font + "text='FINAL CUT'" + common)
+    _assert_one_visual(_discover_pair(client, v1, v2))
+
+
+def test_discover_small_logo_added(client, tmp_path):
+    v1 = _create_pattern_video(tmp_path / "v1.mp4")
+    v2 = _filtered_copy(v1, tmp_path / "v2.mp4", "drawbox=x=255:y=15:w=48:h=40:color=yellow:t=fill")
+    _assert_one_visual(_discover_pair(client, v1, v2))
+
+
+def test_discover_small_logo_removed(client, tmp_path):
+    source = _create_pattern_video(tmp_path / "source.mp4")
+    with_logo = _filtered_copy(source, tmp_path / "with-logo.mp4", "drawbox=x=255:y=15:w=48:h=40:color=yellow:t=fill")
+    _assert_one_visual(_discover_pair(client, with_logo, source))
+
+
+def test_discover_lower_third_changed(client, tmp_path):
+    source = _create_pattern_video(tmp_path / "source.mp4")
+    v1 = _filtered_copy(source, tmp_path / "v1.mp4", "drawbox=x=18:y=185:w=190:h=34:color=blue@0.9:t=fill")
+    v2 = _filtered_copy(source, tmp_path / "v2.mp4", "drawbox=x=18:y=185:w=190:h=34:color=orange@0.9:t=fill")
+    _assert_one_visual(_discover_pair(client, v1, v2))
+
+
+def test_discover_four_percent_crop_zoom(client, tmp_path):
+    v1 = _create_pattern_video(tmp_path / "v1.mp4")
+    v2 = _filtered_copy(v1, tmp_path / "v2.mp4", "crop=iw*0.96:ih*0.96,scale=320:240")
+    _assert_one_visual(_discover_pair(client, v1, v2))
+
+
+def test_discover_color_grade_change(client, tmp_path):
+    v1 = _create_pattern_video(tmp_path / "v1.mp4")
+    v2 = _filtered_copy(v1, tmp_path / "v2.mp4", "hue=h=45")
+    _assert_one_visual(_discover_pair(client, v1, v2))
+
+
+def test_discover_short_visual_replacement(client, tmp_path):
+    v1 = _create_pattern_video(tmp_path / "v1.mp4")
+    v2 = _filtered_copy(
+        v1,
+        tmp_path / "v2.mp4",
+        "drawbox=x=0:y=0:w=iw:h=ih:color=purple:t=fill:enable='between(t,2.0,2.4)'",
+    )
+    _assert_one_visual(_discover_pair(client, v1, v2))
 
 
 def test_discover_removed_segment(client, tmp_path):
@@ -414,6 +526,35 @@ def test_discover_encoding_noise(client, tmp_path):
     assert response.status_code == 200, response.text
     data = response.json()
     # Encoding noise should not produce false positive changes
+    assert data["summary"]["total_changes"] == 0
+
+
+def test_discover_crf_18_to_30_is_not_visual(client, tmp_path):
+    v1 = _create_pattern_video(tmp_path / "v1.mp4", crf=18)
+    v2 = _filtered_copy(v1, tmp_path / "v2.mp4", "null", crf=30)
+    data = _discover_pair(client, v1, v2)
+    assert data["summary"]["visual"] == 0
+    assert data["summary"]["total_changes"] == 0
+
+
+def test_discover_bitrate_change_is_not_visual(client, tmp_path):
+    v1 = _create_pattern_video(tmp_path / "v1.mp4", crf=18)
+    v2 = tmp_path / "v2.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-i", str(v1),
+        "-c:v", "libx264", "-b:v", "180k", "-maxrate", "180k", "-bufsize", "360k",
+        "-c:a", "copy", str(v2),
+    ], check=True)
+    data = _discover_pair(client, v1, v2)
+    assert data["summary"]["visual"] == 0
+    assert data["summary"]["total_changes"] == 0
+
+
+def test_discover_scale_round_trip_noise_is_not_visual(client, tmp_path):
+    v1 = _create_pattern_video(tmp_path / "v1.mp4", crf=18)
+    v2 = _filtered_copy(v1, tmp_path / "v2.mp4", "scale=352:264,scale=320:240", crf=24)
+    data = _discover_pair(client, v1, v2)
+    assert data["summary"]["visual"] == 0
     assert data["summary"]["total_changes"] == 0
 
 
