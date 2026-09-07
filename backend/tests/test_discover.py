@@ -254,18 +254,22 @@ def test_confirmed_visual_converts_to_text(tmp_path, monkeypatch, before, after,
     assert "gemini_visible_text_comparison" in change.evidence.methods
     assert "visible_text_content_changed" in change.evidence.reason_codes
     assert reason in change.evidence.reason_codes
+    assert change.evidence.text_semantic_status == "classified_text"
+    assert change.evidence.text_before == before
+    assert change.evidence.text_after == after
     assert change.evidence.pre_final_timestamp_seconds == 1.25
     assert change.evidence.final_timestamp_seconds == 1.5
 
 
-@pytest.mark.parametrize("finding", [
-    _text_finding(before="FINAL CUT", after="FINAL CUT", is_text_change=False),
-    _text_finding(before=None, after=None, is_text_change=False, confidence="LOW", supporting=[]),
+@pytest.mark.parametrize(("finding", "expected_status"), [
+    (_text_finding(before="FINAL CUT", after="FINAL CUT", is_text_change=False), "same_text"),
+    (_text_finding(before=None, after=None, is_text_change=False, confidence="HIGH", supporting=[]), "unreadable"),
 ])
-def test_same_or_unreadable_text_stays_visual(tmp_path, monkeypatch, finding):
+def test_same_or_unreadable_text_stays_visual(tmp_path, monkeypatch, finding, expected_status):
     changes = _classify_mocked_visuals(tmp_path, monkeypatch, [finding])
     assert len(changes) == 1
     assert changes[0].kind == ChangeKind.VISUAL
+    assert changes[0].evidence.text_semantic_status == expected_status
 
 
 def test_text_semantic_unavailable_stays_visual(tmp_path, monkeypatch):
@@ -286,14 +290,21 @@ def test_text_semantic_unavailable_stays_visual(tmp_path, monkeypatch):
     )
     assert len(changes) == 1
     assert changes[0].kind == ChangeKind.VISUAL
+    assert changes[0].evidence.text_semantic_status == "not_configured"
 
 
-def test_malformed_text_semantic_response_stays_visual(tmp_path, monkeypatch):
+def test_malformed_text_semantic_response_stays_visual(tmp_path, monkeypatch, caplog):
     region, step = _single_visual_region()
     monkeypatch.setattr(discovery, "visual_metrics_at", lambda *args: _visual_metrics(moderate=True, very_strong=True))
     monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
     monkeypatch.setattr(discovery, "text_semantic_configured", lambda: True)
-    monkeypatch.setattr(discovery, "verify_text_change", lambda frames: (_ for _ in ()).throw(ValueError("bad JSON")))
+    secret_detail = "bad JSON containing test-secret-key"
+    monkeypatch.setattr(
+        discovery,
+        "verify_text_change",
+        lambda frames: (_ for _ in ()).throw(ValueError(secret_detail)),
+    )
+    caplog.set_level("INFO", logger=discovery.__name__)
     evidence_dir = tmp_path / "evidence"
     evidence_dir.mkdir()
 
@@ -302,6 +313,34 @@ def test_malformed_text_semantic_response_stays_visual(tmp_path, monkeypatch):
     )
     assert len(changes) == 1
     assert changes[0].kind == ChangeKind.VISUAL
+    assert changes[0].evidence.text_semantic_status == "invalid_response"
+    assert "TEXT_CLASSIFICATION report=evidence change=change-001 status=invalid_response" in caplog.text
+    assert secret_detail not in caplog.text
+
+
+def test_text_semantic_timeout_stays_visual(tmp_path, monkeypatch):
+    region, step = _single_visual_region()
+    monkeypatch.setattr(discovery, "visual_metrics_at", lambda *args: _visual_metrics(moderate=True, very_strong=True))
+    monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
+    monkeypatch.setattr(discovery, "text_semantic_configured", lambda: True)
+    monkeypatch.setattr(discovery, "verify_text_change", lambda frames: (None, "timeout"))
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+
+    changes = discovery.classify_and_verify_changes(
+        [region], [step], 0.25, tmp_path / "v1.mp4", tmp_path / "v2.mp4", evidence_dir, 3.0, 3.0
+    )
+    assert changes[0].kind == ChangeKind.VISUAL
+    assert changes[0].evidence.text_semantic_status == "timeout"
+
+
+def test_low_confidence_text_stays_visual(tmp_path, monkeypatch):
+    finding = _text_finding(before="DRAFT CUT", after="FINAL CUT", confidence="LOW")
+    change = _classify_mocked_visuals(tmp_path, monkeypatch, [finding])[0]
+    assert change.kind == ChangeKind.VISUAL
+    assert change.evidence.text_semantic_status == "low_confidence"
+    assert change.evidence.text_before == "DRAFT CUT"
+    assert change.evidence.text_after == "FINAL CUT"
 
 
 def test_only_textual_visual_edit_converts(tmp_path, monkeypatch):
@@ -321,7 +360,7 @@ def test_text_classification_call_bound(tmp_path, monkeypatch):
     def unavailable(frames):
         nonlocal calls
         calls += 1
-        return None, "unavailable_or_invalid"
+        return None, "api_error"
 
     monkeypatch.setattr(discovery, "visual_metrics_at", lambda *args: _visual_metrics(moderate=True, very_strong=True))
     monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
@@ -342,6 +381,10 @@ def test_text_classification_call_bound(tmp_path, monkeypatch):
 
     assert len(changes) == 10
     assert calls == discovery.MAX_TEXT_CLASSIFICATIONS_PER_REPORT == 8
+    assert [change.evidence.text_semantic_status for change in changes[-2:]] == [
+        "call_limit_reached",
+        "call_limit_reached",
+    ]
 
 
 def test_discover_identical_media_zero_changes(client, tmp_path):
@@ -432,6 +475,9 @@ def test_discover_text_conversion_updates_summary(client, tmp_path, monkeypatch)
     }
     change = data["changes"][0]
     assert change["kind"] == "TEXT"
+    assert change["evidence"]["text_semantic_status"] == "classified_text"
+    assert change["evidence"]["text_before"] == "DRAFT CUT"
+    assert change["evidence"]["text_after"] == "FINAL CUT"
     visible_text = next(metric for metric in change["evidence"]["metrics"] if metric["name"] == "visible_text")
     assert visible_text["v1"] == "DRAFT CUT"
     assert visible_text["v2"] == "FINAL CUT"
@@ -465,6 +511,7 @@ def test_discover_same_text_style_change_stays_visual(client, tmp_path, monkeypa
     assert data["summary"]["visual"] == 1
     assert data["summary"]["text"] == 0
     assert data["changes"][0]["kind"] == "VISUAL"
+    assert data["changes"][0]["evidence"]["text_semantic_status"] == "same_text"
 
 
 def test_discover_small_logo_added(client, tmp_path):

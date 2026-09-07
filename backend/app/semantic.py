@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .models import RevisionRequest
 
@@ -128,28 +128,47 @@ def text_semantic_configured() -> bool:
     return bool(os.getenv("GEMINI_API_KEY") and os.getenv("GEMINI_MODEL"))
 
 
+def text_semantic_readiness() -> dict[str, bool]:
+    model_configured = bool(os.getenv("GEMINI_MODEL"))
+    return {
+        "configured": bool(os.getenv("GEMINI_API_KEY")) and model_configured,
+        "model_configured": model_configured,
+    }
+
+
+def text_failure_status(error: Exception) -> Literal["timeout", "invalid_response", "api_error"]:
+    """Map failures by type only; never inspect or expose exception messages."""
+    type_names = {cls.__name__.lower() for cls in type(error).__mro__}
+    if isinstance(error, TimeoutError) or any("timeout" in name or "deadline" in name for name in type_names):
+        return "timeout"
+    if isinstance(error, (ValidationError, json.JSONDecodeError, ValueError)):
+        return "invalid_response"
+    return "api_error"
+
+
 def verify_text_change(
     frames: list[tuple[float, float, Path, Path]],
 ) -> tuple[TextChangeFinding | None, str]:
     key = os.getenv("GEMINI_API_KEY")
     model = os.getenv("GEMINI_MODEL")
-    if not key:
-        return None, "missing_key"
-    if not model:
-        return None, "missing_model"
+    if not key or not model:
+        return None, "not_configured"
     prompt = json.dumps({
         "task": "Classify only whether readable visible text content differs across these aligned frame pairs.",
         "frame_pair_count": len(frames),
     })
     try:
-        finding = TextChangeFinding.model_validate_json(_generate_text_change(prompt, frames, key, model))
+        raw_response = _generate_text_change(prompt, frames, key, model)
+    except Exception as error:
+        return None, text_failure_status(error)
+    try:
+        finding = TextChangeFinding.model_validate_json(raw_response)
         if any(i < 0 or i >= len(frames) for i in finding.supporting_frame_indices):
             return None, "invalid_response"
         before = (finding.before_text.strip() or None) if finding.before_text else None
         after = (finding.after_text.strip() or None) if finding.after_text else None
         if finding.is_text_change and (
             not finding.has_visible_text
-            or finding.confidence == "LOW"
             or not finding.supporting_frame_indices
             or (before is None and after is None)
             or before == after
@@ -159,5 +178,5 @@ def verify_text_change(
             if key in value:
                 return None, "invalid_response"
         return finding.model_copy(update={"before_text": before, "after_text": after}), "available"
-    except Exception:
-        return None, "unavailable_or_invalid"
+    except Exception as error:
+        return None, text_failure_status(error)

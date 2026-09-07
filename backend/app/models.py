@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -92,6 +94,20 @@ class ChangeConfidence(str, Enum):
     LOW = "LOW"
 
 
+TextSemanticStatus = Literal[
+    "not_configured",
+    "attempted",
+    "classified_text",
+    "same_text",
+    "unreadable",
+    "low_confidence",
+    "invalid_response",
+    "api_error",
+    "timeout",
+    "call_limit_reached",
+]
+
+
 class ChangeEvidence(BaseModel):
     pre_final_timestamp_seconds: float | None = None
     final_timestamp_seconds: float | None = None
@@ -104,6 +120,9 @@ class ChangeEvidence(BaseModel):
     metrics: list[EvidenceMetric] = Field(default_factory=list)
     methods: list[str] = Field(default_factory=list)
     reason_codes: list[str] = Field(default_factory=list)
+    text_semantic_status: TextSemanticStatus | None = None
+    text_before: str | None = None
+    text_after: str | None = None
     explanation: str
 
 

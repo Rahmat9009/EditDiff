@@ -105,9 +105,9 @@ def test_text_change_system_instruction_is_strict():
 
 def test_text_change_missing_config_and_valid_response(monkeypatch):
     frames = [(1.0, 1.25, Path('before.jpg'), Path('after.jpg'))]
-    assert semantic.verify_text_change(frames) == (None, 'missing_key')
+    assert semantic.verify_text_change(frames) == (None, 'not_configured')
     monkeypatch.setenv('GEMINI_API_KEY', 'test-secret-key')
-    assert semantic.verify_text_change(frames) == (None, 'missing_model')
+    assert semantic.verify_text_change(frames) == (None, 'not_configured')
     monkeypatch.setenv('GEMINI_MODEL', 'test-model')
     monkeypatch.setattr(semantic, '_generate_text_change', lambda *args: text_finding().model_dump_json())
     result, status = semantic.verify_text_change(frames)
@@ -120,7 +120,6 @@ def test_text_change_missing_config_and_valid_response(monkeypatch):
     'not JSON',
     text_finding(supporting_frame_indices=[1]).model_dump_json(),
     text_finding(before_text='FINAL CUT', after_text='FINAL CUT').model_dump_json(),
-    text_finding(confidence='LOW').model_dump_json(),
     text_finding(has_visible_text=False).model_dump_json(),
     text_finding(before_text=None, after_text=None).model_dump_json(),
     text_finding(before_text=' ', after_text=None).model_dump_json(),
@@ -133,3 +132,43 @@ def test_invalid_text_change_response_falls_back(monkeypatch, response):
     result, status = semantic.verify_text_change([(1.0, 1.25, Path('a'), Path('b'))])
     assert result is None
     assert status != 'available'
+
+
+@pytest.mark.parametrize(('error', 'expected'), [
+    (TimeoutError('secret timeout details'), 'timeout'),
+    (RuntimeError('secret API details'), 'api_error'),
+    (ValueError('secret malformed payload'), 'invalid_response'),
+])
+def test_text_change_failure_status_is_safe(monkeypatch, error, expected):
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-secret-key')
+    monkeypatch.setenv('GEMINI_MODEL', 'test-model')
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr(semantic, '_generate_text_change', fail)
+    assert semantic.verify_text_change([]) == (None, expected)
+
+
+def test_low_confidence_text_response_remains_available_for_fallback(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-secret-key')
+    monkeypatch.setenv('GEMINI_MODEL', 'test-model')
+    low = text_finding(confidence='LOW')
+    monkeypatch.setattr(semantic, '_generate_text_change', lambda *args: low.model_dump_json())
+    assert semantic.verify_text_change([(1.0, 1.25, Path('a'), Path('b'))]) == (low, 'available')
+
+
+@pytest.mark.parametrize(('key', 'model', 'expected'), [
+    (None, None, {'configured': False, 'model_configured': False}),
+    ('key', None, {'configured': False, 'model_configured': False}),
+    (None, 'model', {'configured': False, 'model_configured': True}),
+    ('key', 'model', {'configured': True, 'model_configured': True}),
+])
+def test_semantic_health_requires_key_and_model(client, monkeypatch, key, model, expected):
+    if key is not None:
+        monkeypatch.setenv('GEMINI_API_KEY', key)
+    if model is not None:
+        monkeypatch.setenv('GEMINI_MODEL', model)
+    response = client.get('/health/semantic')
+    assert response.status_code == 200
+    assert response.json() == expected

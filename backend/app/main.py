@@ -17,6 +17,7 @@ from .discovery import discover_changes
 from .media import MediaError, probe_media
 from .models import AnalyzeResponse, DiscoverResponse, RevisionRequest
 from .notes import parse_notes
+from .semantic import text_semantic_readiness
 from .verifier import verify
 
 BASE = Path(__file__).resolve().parent.parent
@@ -64,6 +65,11 @@ app.mount("/evidence", StaticFiles(directory=EVIDENCE), name="evidence")
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/semantic")
+def health_semantic() -> dict[str, bool]:
+    return text_semantic_readiness()
 
 
 async def _save(upload: UploadFile, destination: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import uuid
 from dataclasses import dataclass
@@ -26,7 +27,11 @@ from .models import (
     DiscoverSummary,
     EvidenceMetric,
 )
-from .semantic import TextChangeFinding, text_semantic_configured, verify_text_change
+from .semantic import TextChangeFinding, text_failure_status, text_semantic_configured, verify_text_change
+
+logger = logging.getLogger(__name__)
+
+TEXT_SEMANTIC_FAILURE_STATUSES = {"not_configured", "invalid_response", "api_error", "timeout"}
 
 # Deterministic coarse-candidate thresholds (64x36 descriptors). These are set above
 # ordinary H.264 ringing while allowing a few materially changed tiles through.
@@ -477,6 +482,9 @@ def _classify_visual_as_text(
         "metrics": metrics,
         "methods": methods,
         "reason_codes": reason_codes,
+        "text_semantic_status": "classified_text",
+        "text_before": before,
+        "text_after": after,
         "explanation": description,
     })
     return change.model_copy(update={
@@ -486,6 +494,31 @@ def _classify_visual_as_text(
         "description": description,
         "evidence": evidence,
     })
+
+
+def _record_text_semantic_status(
+    change: DetectedChange,
+    report_id: str,
+    status: str,
+    finding: TextChangeFinding | None = None,
+) -> DetectedChange:
+    logger.info("TEXT_CLASSIFICATION report=%s change=%s status=%s", report_id, change.id, status)
+    evidence = change.evidence.model_copy(update={
+        "text_semantic_status": status,
+        "text_before": finding.before_text if finding is not None else None,
+        "text_after": finding.after_text if finding is not None else None,
+    })
+    return change.model_copy(update={"evidence": evidence})
+
+
+def _semantic_finding_status(finding: TextChangeFinding) -> str:
+    if finding.confidence == "LOW":
+        return "low_confidence"
+    if not finding.has_visible_text or (finding.before_text is None and finding.after_text is None):
+        return "unreadable"
+    if not finding.is_text_change:
+        return "same_text"
+    return "classified_text"
 
 
 def coalesce_candidate_regions(path: list[AlignmentStep], step: float) -> list[CandidateRegion]:
@@ -685,7 +718,15 @@ def classify_and_verify_changes(
                 evidence=evidence,
             )
 
-            if text_classification_count < MAX_TEXT_CLASSIFICATIONS_PER_REPORT and text_semantic_configured():
+            if not text_semantic_configured():
+                visual_change = _record_text_semantic_status(
+                    visual_change, evidence_dir.name, "not_configured"
+                )
+            elif text_classification_count >= MAX_TEXT_CLASSIFICATIONS_PER_REPORT:
+                visual_change = _record_text_semantic_status(
+                    visual_change, evidence_dir.name, "call_limit_reached"
+                )
+            else:
                 text_classification_count += 1
                 try:
                     text_frame_pairs: list[tuple[float, float, Path, Path]] = []
@@ -706,15 +747,28 @@ def classify_and_verify_changes(
                         text_frame_pairs.append((step_item.t1, step_item.t2, text_p1, text_p2))
                     text_finding, text_status = verify_text_change(text_frame_pairs)
                     if text_status == "available" and text_finding is not None:
-                        visual_change = _classify_visual_as_text(
-                            visual_change,
-                            text_finding,
-                            text_frame_pairs,
-                            evidence_dir,
+                        final_status = _semantic_finding_status(text_finding)
+                        if final_status == "classified_text":
+                            visual_change = _classify_visual_as_text(
+                                visual_change,
+                                text_finding,
+                                text_frame_pairs,
+                                evidence_dir,
+                            )
+                        visual_change = _record_text_semantic_status(
+                            visual_change, evidence_dir.name, final_status, text_finding
                         )
-                except Exception:
+                    else:
+                        if text_status not in TEXT_SEMANTIC_FAILURE_STATUSES:
+                            text_status = "invalid_response"
+                        visual_change = _record_text_semantic_status(
+                            visual_change, evidence_dir.name, text_status
+                        )
+                except Exception as error:
                     # Optional semantic enrichment must never invalidate a proven visual result.
-                    pass
+                    visual_change = _record_text_semantic_status(
+                        visual_change, evidence_dir.name, text_failure_status(error)
+                    )
 
             detected.append(visual_change)
 
