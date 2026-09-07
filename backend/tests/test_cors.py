@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
-from app.main import DEFAULT_CORS_ORIGINS, get_cors_origins
+from app.main import DEFAULT_CORS_ORIGINS, VERCEL_PREVIEW_ORIGIN_REGEX, get_cors_origins
 
 
 def test_cors_origins_defaults_when_unset(monkeypatch):
@@ -78,11 +78,52 @@ def test_cors_local_defaults_accepted_by_app(client):
     assert "access-control-allow-origin" not in rejected.headers
 
 
+@pytest.mark.parametrize("origin", [
+    "http://localhost:3000",
+    "https://frontend-two-self-17.vercel.app",
+    "https://frontend-pr-42-a1b2c3-rahmat9009s-projects.vercel.app",
+])
+def test_cors_expected_deployment_origins_allowed(client, origin):
+    response = client.get("/health", headers={"Origin": origin})
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == origin
+    assert response.headers.get("access-control-allow-credentials") == "true"
+
+
+@pytest.mark.parametrize("origin", [
+    "https://unrelated.vercel.app",
+    "https://frontend-preview-someone-elses-projects.vercel.app",
+    "https://frontend-preview-rahmat9009s-projects.vercel.app.evil.example",
+    "https://frontend-preview-rahmat9009s-projects.evil.vercel.app",
+    "https://frontend-preview-rahmat9009s-projects-vercel.app",
+])
+def test_cors_unrelated_or_evil_origins_rejected(client, origin):
+    response = client.get("/health", headers={"Origin": origin})
+    assert response.status_code == 200
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_cors_preview_preflight_allowed(client):
+    origin = "https://frontend-fix-api-health-rahmat9009s-projects.vercel.app"
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == origin
+    assert response.headers.get("access-control-allow-credentials") == "true"
+
+
 def test_cors_production_origin_middleware():
     test_app = FastAPI()
     test_app.add_middleware(
         CORSMiddleware,
         allow_origins=get_cors_origins("https://editdiff.vercel.app, https://preview.vercel.app"),
+        allow_origin_regex=VERCEL_PREVIEW_ORIGIN_REGEX,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

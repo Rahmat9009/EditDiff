@@ -29,7 +29,15 @@ for directory in (UPLOADS, EVIDENCE, REPORTS, DISCOVER_REPORTS):
     directory.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 250 * 1024 * 1024
 
-DEFAULT_CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://frontend-two-self-17.vercel.app",
+]
+VERCEL_PREVIEW_ORIGIN_REGEX = (
+    r"^https://frontend-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+    r"-rahmat9009s-projects\.vercel\.app$"
+)
 
 
 def get_cors_origins(raw: str | None = None) -> list[str]:
@@ -45,6 +53,7 @@ app = FastAPI(title="EditDiff API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_origins(),
+    allow_origin_regex=VERCEL_PREVIEW_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
