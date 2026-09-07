@@ -26,6 +26,7 @@ from .models import (
     DiscoverSummary,
     EvidenceMetric,
 )
+from .semantic import TextChangeFinding, text_semantic_configured, verify_text_change
 
 # Deterministic coarse-candidate thresholds (64x36 descriptors). These are set above
 # ordinary H.264 ringing while allowing a few materially changed tiles through.
@@ -51,6 +52,7 @@ VERY_STRONG_LOCAL_AREA_MIN = 0.010
 VERY_STRONG_COLOR_MIN = 0.070
 VERY_STRONG_COLOR_AREA_MIN = 0.030
 MAX_VISUAL_VERIFICATION_PAIRS = 3
+MAX_TEXT_CLASSIFICATIONS_PER_REPORT = 8
 FLANK_VISUAL_MAX = 0.08            # Visual distance threshold for a stable matching flank
 
 AUDIO_ACTIVE_MIN = 0.008           # Minimum RMS to consider audio active
@@ -425,6 +427,67 @@ class CandidateRegion:
     steps: list[AlignmentStep]
 
 
+def _classify_visual_as_text(
+    change: DetectedChange,
+    finding: TextChangeFinding,
+    frame_pairs: list[tuple[float, float, Path, Path]],
+    evidence_dir: Path,
+) -> DetectedChange:
+    """Enrich one proven visual change without weakening its deterministic evidence."""
+    if not finding.is_text_change or finding.confidence == "LOW":
+        return change
+
+    before = finding.before_text
+    after = finding.after_text
+    if before is None:
+        description = f"Visible text was added: “{after}”."
+        specific_reason = "visible_text_added"
+    elif after is None:
+        description = f"Visible text was removed: “{before}”."
+        specific_reason = "visible_text_removed"
+    else:
+        description = f"Visible text changed from “{before}” to “{after}”."
+        specific_reason = "visible_text_replaced"
+
+    supporting_count = len(set(finding.supporting_frame_indices))
+    confidence = (
+        ChangeConfidence.HIGH
+        if (
+            change.confidence == ChangeConfidence.HIGH
+            and finding.confidence == "HIGH"
+            and (supporting_count >= 2 or len(frame_pairs) == 1)
+        )
+        else ChangeConfidence.MEDIUM
+    )
+    evidence_index = finding.supporting_frame_indices[0]
+    t1, t2, p1_img, p2_img = frame_pairs[evidence_index]
+    metrics = list(change.evidence.metrics) + [
+        EvidenceMetric(name="visible_text", v1=before, v2=after, unit="text"),
+        EvidenceMetric(name="text_semantic_confidence", v2=finding.confidence, unit="label"),
+    ]
+    methods = list(dict.fromkeys(change.evidence.methods + ["gemini_visible_text_comparison"]))
+    reason_codes = list(dict.fromkeys(
+        change.evidence.reason_codes + ["visible_text_content_changed", specific_reason]
+    ))
+    evidence = change.evidence.model_copy(update={
+        "pre_final_timestamp_seconds": round(t1, 3),
+        "final_timestamp_seconds": round(t2, 3),
+        "pre_final_frame_path": f"/evidence/{evidence_dir.name}/{p1_img.name}",
+        "final_frame_path": f"/evidence/{evidence_dir.name}/{p2_img.name}",
+        "metrics": metrics,
+        "methods": methods,
+        "reason_codes": reason_codes,
+        "explanation": description,
+    })
+    return change.model_copy(update={
+        "kind": ChangeKind.TEXT,
+        "confidence": confidence,
+        "title": "TEXT CHANGE",
+        "description": description,
+        "evidence": evidence,
+    })
+
+
 def coalesce_candidate_regions(path: list[AlignmentStep], step: float) -> list[CandidateRegion]:
     """
     Coalesces consecutive alignment anomaly steps into candidate regions.
@@ -521,6 +584,7 @@ def classify_and_verify_changes(
     conservative reason codes, and creates evidence JPGs only for confirmed changes.
     """
     detected: list[DetectedChange] = []
+    text_classification_count = 0
 
     for idx, reg in enumerate(regions):
         change_id = f"change-{idx + 1:03d}"
@@ -612,14 +676,47 @@ def classify_and_verify_changes(
                 explanation="The aligned visual content differs materially between versions.",
             )
 
-            detected.append(DetectedChange(
+            visual_change = DetectedChange(
                 id=change_id,
                 kind=ChangeKind.VISUAL,
                 confidence=confidence,
                 title="VISUAL CHANGE",
                 description="The aligned visual content differs materially between versions.",
                 evidence=evidence,
-            ))
+            )
+
+            if text_classification_count < MAX_TEXT_CLASSIFICATIONS_PER_REPORT and text_semantic_configured():
+                text_classification_count += 1
+                try:
+                    text_frame_pairs: list[tuple[float, float, Path, Path]] = []
+                    for pair_index, step_item in enumerate(selected_steps):
+                        if step_item.t1 == t1_evidence and step_item.t2 == t2_evidence:
+                            text_p1, text_p2 = p1_img, p2_img
+                        else:
+                            text_p1 = extract_frame(
+                                v1_path,
+                                step_item.t1,
+                                evidence_dir / f"{change_id}-text-{pair_index + 1}-pre.jpg",
+                            )
+                            text_p2 = extract_frame(
+                                v2_path,
+                                step_item.t2,
+                                evidence_dir / f"{change_id}-text-{pair_index + 1}-final.jpg",
+                            )
+                        text_frame_pairs.append((step_item.t1, step_item.t2, text_p1, text_p2))
+                    text_finding, text_status = verify_text_change(text_frame_pairs)
+                    if text_status == "available" and text_finding is not None:
+                        visual_change = _classify_visual_as_text(
+                            visual_change,
+                            text_finding,
+                            text_frame_pairs,
+                            evidence_dir,
+                        )
+                except Exception:
+                    # Optional semantic enrichment must never invalidate a proven visual result.
+                    pass
+
+            detected.append(visual_change)
 
         elif reg.kind in ("TIMING_DELETE", "TIMING_INSERT"):
             is_delete = (reg.kind == "TIMING_DELETE")

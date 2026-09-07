@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from app import discovery, main
 from app.models import ChangeConfidence, ChangeKind, DiscoverResponse
+from app.semantic import TextChangeFinding
 
 
 def _create_synthetic_video(
@@ -132,6 +133,48 @@ def _visual_metrics(*, moderate: bool, very_strong: bool) -> discovery.VisualMet
     )
 
 
+def _text_finding(
+    *,
+    before: str | None,
+    after: str | None,
+    is_text_change: bool = True,
+    confidence: str = "HIGH",
+    supporting: list[int] | None = None,
+) -> TextChangeFinding:
+    return TextChangeFinding(
+        has_visible_text=before is not None or after is not None,
+        is_text_change=is_text_change,
+        before_text=before,
+        after_text=after,
+        confidence=confidence,
+        supporting_frame_indices=[0] if supporting is None else supporting,
+        explanation="Only the readable visible wording differs." if is_text_change else "Readable wording is unchanged.",
+    )
+
+
+def _classify_mocked_visuals(tmp_path, monkeypatch, findings):
+    regions_and_steps = [_single_visual_region() for _ in findings]
+    regions = [item[0] for item in regions_and_steps]
+    steps = [item[1] for item in regions_and_steps]
+    finding_iter = iter(findings)
+    monkeypatch.setattr(discovery, "visual_metrics_at", lambda *args: _visual_metrics(moderate=True, very_strong=True))
+    monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
+    monkeypatch.setattr(discovery, "text_semantic_configured", lambda: True)
+    monkeypatch.setattr(discovery, "verify_text_change", lambda frames: (next(finding_iter), "available"))
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    return discovery.classify_and_verify_changes(
+        regions,
+        steps,
+        step=0.25,
+        v1_path=tmp_path / "v1.mp4",
+        v2_path=tmp_path / "v2.mp4",
+        evidence_dir=evidence_dir,
+        d1=3.0,
+        d2=3.0,
+    )
+
+
 def test_very_strong_frame_is_supporting_evidence(tmp_path, monkeypatch):
     region, step = _single_visual_region()
     evidence_dir = tmp_path / "evidence"
@@ -186,6 +229,119 @@ def test_non_supporting_frame_does_not_emit_visual(tmp_path, monkeypatch):
     )
 
     assert changes == []
+
+
+@pytest.mark.parametrize(("before", "after", "reason"), [
+    ("DRAFT CUT", "FINAL CUT", "visible_text_replaced"),
+    (None, "LIMITED OFFER", "visible_text_added"),
+    ("WATERMARK", None, "visible_text_removed"),
+])
+def test_confirmed_visual_converts_to_text(tmp_path, monkeypatch, before, after, reason):
+    changes = _classify_mocked_visuals(
+        tmp_path,
+        monkeypatch,
+        [_text_finding(before=before, after=after)],
+    )
+
+    assert len(changes) == 1
+    change = changes[0]
+    assert change.kind == ChangeKind.TEXT
+    assert change.title == "TEXT CHANGE"
+    assert change.confidence == ChangeConfidence.MEDIUM
+    visible_text = next(metric for metric in change.evidence.metrics if metric.name == "visible_text")
+    assert visible_text.v1 == before
+    assert visible_text.v2 == after
+    assert "gemini_visible_text_comparison" in change.evidence.methods
+    assert "visible_text_content_changed" in change.evidence.reason_codes
+    assert reason in change.evidence.reason_codes
+    assert change.evidence.pre_final_timestamp_seconds == 1.25
+    assert change.evidence.final_timestamp_seconds == 1.5
+
+
+@pytest.mark.parametrize("finding", [
+    _text_finding(before="FINAL CUT", after="FINAL CUT", is_text_change=False),
+    _text_finding(before=None, after=None, is_text_change=False, confidence="LOW", supporting=[]),
+])
+def test_same_or_unreadable_text_stays_visual(tmp_path, monkeypatch, finding):
+    changes = _classify_mocked_visuals(tmp_path, monkeypatch, [finding])
+    assert len(changes) == 1
+    assert changes[0].kind == ChangeKind.VISUAL
+
+
+def test_text_semantic_unavailable_stays_visual(tmp_path, monkeypatch):
+    region, step = _single_visual_region()
+    monkeypatch.setattr(discovery, "visual_metrics_at", lambda *args: _visual_metrics(moderate=True, very_strong=True))
+    monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
+    monkeypatch.setattr(discovery, "text_semantic_configured", lambda: False)
+    monkeypatch.setattr(
+        discovery,
+        "verify_text_change",
+        lambda frames: pytest.fail("Semantic classifier must not run without configuration"),
+    )
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+
+    changes = discovery.classify_and_verify_changes(
+        [region], [step], 0.25, tmp_path / "v1.mp4", tmp_path / "v2.mp4", evidence_dir, 3.0, 3.0
+    )
+    assert len(changes) == 1
+    assert changes[0].kind == ChangeKind.VISUAL
+
+
+def test_malformed_text_semantic_response_stays_visual(tmp_path, monkeypatch):
+    region, step = _single_visual_region()
+    monkeypatch.setattr(discovery, "visual_metrics_at", lambda *args: _visual_metrics(moderate=True, very_strong=True))
+    monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
+    monkeypatch.setattr(discovery, "text_semantic_configured", lambda: True)
+    monkeypatch.setattr(discovery, "verify_text_change", lambda frames: (_ for _ in ()).throw(ValueError("bad JSON")))
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+
+    changes = discovery.classify_and_verify_changes(
+        [region], [step], 0.25, tmp_path / "v1.mp4", tmp_path / "v2.mp4", evidence_dir, 3.0, 3.0
+    )
+    assert len(changes) == 1
+    assert changes[0].kind == ChangeKind.VISUAL
+
+
+def test_only_textual_visual_edit_converts(tmp_path, monkeypatch):
+    findings = [
+        _text_finding(before="DRAFT CUT", after="FINAL CUT"),
+        _text_finding(before="FINAL CUT", after="FINAL CUT", is_text_change=False),
+        _text_finding(before=None, after=None, is_text_change=False, confidence="LOW", supporting=[]),
+    ]
+    changes = _classify_mocked_visuals(tmp_path, monkeypatch, findings)
+    assert [change.kind for change in changes] == [ChangeKind.TEXT, ChangeKind.VISUAL, ChangeKind.VISUAL]
+
+
+def test_text_classification_call_bound(tmp_path, monkeypatch):
+    regions_and_steps = [_single_visual_region() for _ in range(10)]
+    calls = 0
+
+    def unavailable(frames):
+        nonlocal calls
+        calls += 1
+        return None, "unavailable_or_invalid"
+
+    monkeypatch.setattr(discovery, "visual_metrics_at", lambda *args: _visual_metrics(moderate=True, very_strong=True))
+    monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
+    monkeypatch.setattr(discovery, "text_semantic_configured", lambda: True)
+    monkeypatch.setattr(discovery, "verify_text_change", unavailable)
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    changes = discovery.classify_and_verify_changes(
+        [item[0] for item in regions_and_steps],
+        [item[1] for item in regions_and_steps],
+        0.25,
+        tmp_path / "v1.mp4",
+        tmp_path / "v2.mp4",
+        evidence_dir,
+        3.0,
+        3.0,
+    )
+
+    assert len(changes) == 10
+    assert calls == discovery.MAX_TEXT_CLASSIFICATIONS_PER_REPORT == 8
 
 
 def test_discover_identical_media_zero_changes(client, tmp_path):
@@ -246,6 +402,69 @@ def test_discover_small_title_change(client, tmp_path):
     v1 = _filtered_copy(source, tmp_path / "v1.mp4", font + "text='EXPORT V1'" + common)
     v2 = _filtered_copy(source, tmp_path / "v2.mp4", font + "text='FINAL CUT'" + common)
     _assert_one_visual(_discover_pair(client, v1, v2))
+
+
+def test_discover_text_conversion_updates_summary(client, tmp_path, monkeypatch):
+    source = _create_pattern_video(tmp_path / "source.mp4")
+    common = ":x=(w-text_w)/2:y=28:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.75"
+    font = _drawtext_font_filter()
+    v1 = _filtered_copy(source, tmp_path / "v1.mp4", font + "text='DRAFT CUT'" + common)
+    v2 = _filtered_copy(source, tmp_path / "v2.mp4", font + "text='FINAL CUT'" + common)
+    calls = []
+
+    def classify(frames):
+        calls.append(frames)
+        return _text_finding(before="DRAFT CUT", after="FINAL CUT"), "available"
+
+    monkeypatch.setattr(discovery, "text_semantic_configured", lambda: True)
+    monkeypatch.setattr(discovery, "verify_text_change", classify)
+    data = _discover_pair(client, v1, v2)
+
+    assert len(calls) == 1
+    assert len(calls[0]) <= 3
+    assert data["summary"] == {
+        "total_changes": 1,
+        "visual": 0,
+        "timing": 0,
+        "audio": 0,
+        "text": 1,
+        "review": 0,
+    }
+    change = data["changes"][0]
+    assert change["kind"] == "TEXT"
+    visible_text = next(metric for metric in change["evidence"]["metrics"] if metric["name"] == "visible_text")
+    assert visible_text["v1"] == "DRAFT CUT"
+    assert visible_text["v2"] == "FINAL CUT"
+
+
+def test_discover_same_text_style_change_stays_visual(client, tmp_path, monkeypatch):
+    source = _create_pattern_video(tmp_path / "source.mp4")
+    font = _drawtext_font_filter()
+    v1 = _filtered_copy(
+        source,
+        tmp_path / "v1.mp4",
+        font + "text='FINAL CUT':x=(w-text_w)/2:y=28:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.75",
+    )
+    v2 = _filtered_copy(
+        source,
+        tmp_path / "v2.mp4",
+        font + "text='FINAL CUT':x=(w-text_w)/2:y=28:fontsize=32:fontcolor=yellow:box=1:boxcolor=black@0.75",
+    )
+    monkeypatch.setattr(discovery, "text_semantic_configured", lambda: True)
+    monkeypatch.setattr(
+        discovery,
+        "verify_text_change",
+        lambda frames: (
+            _text_finding(before="FINAL CUT", after="FINAL CUT", is_text_change=False),
+            "available",
+        ),
+    )
+    data = _discover_pair(client, v1, v2)
+
+    assert data["summary"]["total_changes"] == 1
+    assert data["summary"]["visual"] == 1
+    assert data["summary"]["text"] == 0
+    assert data["changes"][0]["kind"] == "VISUAL"
 
 
 def test_discover_small_logo_added(client, tmp_path):
