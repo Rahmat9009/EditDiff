@@ -539,9 +539,14 @@ def classify_and_verify_changes(
                 (step_item, visual_metrics_at(v1_path, step_item.t1, v2_path, step_item.t2))
                 for step_item in selected_steps
             ]
-            supporting = [(step_item, values) for step_item, values in verified if values.moderate]
+            supporting = [
+                (step_item, values)
+                for step_item, values in verified
+                if values.moderate or values.very_strong
+            ]
+            moderate_count = sum(1 for _, values in verified if values.moderate)
             very_strong_count = sum(1 for _, values in verified if values.very_strong)
-            if very_strong_count == 0 and len(supporting) < 2:
+            if very_strong_count == 0 and moderate_count < 2:
                 continue
 
             strongest_step, strongest = max(

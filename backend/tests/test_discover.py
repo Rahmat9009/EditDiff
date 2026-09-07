@@ -93,6 +93,101 @@ def _assert_one_visual(data: dict) -> None:
     assert "multi_frame_verification" in change["evidence"]["methods"]
 
 
+def _single_visual_region() -> tuple[discovery.CandidateRegion, discovery.AlignmentStep]:
+    step = discovery.AlignmentStep(
+        kind="REPLACE",
+        i=0,
+        j=0,
+        t1=1.25,
+        t2=1.5,
+        d_vis=0.01,
+        a1=0.0,
+        a2=0.0,
+    )
+    region = discovery.CandidateRegion(
+        kind="VISUAL",
+        t1_start=1.25,
+        t1_end=1.25,
+        t2_start=1.5,
+        t2_end=1.5,
+        start_step_idx=0,
+        end_step_idx=0,
+        steps=[step],
+    )
+    return region, step
+
+
+def _visual_metrics(*, moderate: bool, very_strong: bool) -> discovery.VisualMetrics:
+    return discovery.VisualMetrics(
+        global_mean_difference=0.01,
+        changed_pixel_ratio=0.01,
+        max_tile_difference=0.01,
+        p95_tile_difference=0.01,
+        changed_tile_ratio=0.01,
+        color_difference=0.01,
+        edge_change_ratio=0.01,
+        orb_match_ratio=0.9,
+        moderate=moderate,
+        very_strong=very_strong,
+    )
+
+
+def test_very_strong_frame_is_supporting_evidence(tmp_path, monkeypatch):
+    region, step = _single_visual_region()
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    monkeypatch.setattr(
+        discovery,
+        "visual_metrics_at",
+        lambda *args: _visual_metrics(moderate=False, very_strong=True),
+    )
+    monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
+
+    changes = discovery.classify_and_verify_changes(
+        [region],
+        [step],
+        step=0.25,
+        v1_path=tmp_path / "v1.mp4",
+        v2_path=tmp_path / "v2.mp4",
+        evidence_dir=evidence_dir,
+        d1=3.0,
+        d2=3.0,
+    )
+
+    assert len(changes) == 1
+    assert changes[0].kind == ChangeKind.VISUAL
+    assert changes[0].confidence == ChangeConfidence.MEDIUM
+    assert changes[0].evidence.pre_final_timestamp_seconds == 1.25
+    assert changes[0].evidence.final_timestamp_seconds == 1.5
+    assert changes[0].evidence.pre_final_frame_path.endswith("change-001-pre.jpg")
+    assert changes[0].evidence.final_frame_path.endswith("change-001-final.jpg")
+
+
+def test_non_supporting_frame_does_not_emit_visual(tmp_path, monkeypatch):
+    region, step = _single_visual_region()
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    monkeypatch.setattr(
+        discovery,
+        "visual_metrics_at",
+        lambda *args: _visual_metrics(moderate=False, very_strong=False),
+    )
+    monkeypatch.setattr(discovery, "extract_frame", lambda path, timestamp, out_path: out_path)
+
+    changes = discovery.classify_and_verify_changes(
+        [region],
+        [step],
+        step=0.25,
+        v1_path=tmp_path / "v1.mp4",
+        v2_path=tmp_path / "v2.mp4",
+        evidence_dir=evidence_dir,
+        d1=3.0,
+        d2=3.0,
+    )
+
+    assert changes == []
+
+
 def test_discover_identical_media_zero_changes(client, tmp_path):
     v1 = _create_synthetic_video(tmp_path / "v1.mp4", duration=3.0, color="blue")
     response = client.post(
