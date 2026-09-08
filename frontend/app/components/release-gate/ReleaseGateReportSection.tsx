@@ -2,7 +2,12 @@
 
 import { useMemo } from "react";
 import { timecode } from "../../lib/format";
-import { DECISION_GLYPH, type ReleaseGateResult } from "../../lib/releaseGate";
+import {
+  DECISION_GLYPH,
+  isUnresolved,
+  technicalCheckTimestamp,
+  type ReleaseGateResult,
+} from "../../lib/releaseGate";
 import { EvidenceEntry } from "../EvidenceEntry";
 import { VerdictBadge } from "../VerdictBadge";
 import { ChangeAssessmentEntry } from "./ChangeAssessmentEntry";
@@ -69,29 +74,31 @@ export function ReleaseGateReportSection({
       });
     });
 
-    change_assessments.forEach((c, i) => {
+    change_assessments.forEach((assessment, i) => {
+      const { change, disposition } = assessment;
       const seconds =
-        c.evidence.final_timestamp_seconds ?? c.evidence.pre_final_timestamp_seconds;
+        change.evidence.final_timestamp_seconds ?? change.evidence.pre_final_timestamp_seconds;
       if (seconds == null) return;
       out.push({
-        id: `${CHANGE_PREFIX}${c.id}`,
+        id: `${CHANGE_PREFIX}${change.id}`,
         seconds,
-        tone: c.disposition.toLowerCase().replaceAll("_", "-"),
-        glyph: c.disposition === "UNEXPECTED" ? "!" : c.disposition === "REVIEW" ? "?" : "✓",
-        label: c.title,
+        tone: disposition.toLowerCase().replaceAll("_", "-"),
+        glyph: disposition === "UNEXPECTED" ? "!" : disposition === "REVIEW" ? "?" : "✓",
+        label: change.title,
         group: "Detected change",
         index: i + 1,
       });
     });
 
     technical_checks.forEach((t, i) => {
-      if (t.timestamp_seconds == null) return;
+      const seconds = technicalCheckTimestamp(t);
+      if (seconds == null) return;
       out.push({
         id: `${TECHNICAL_PREFIX}${t.id}`,
-        seconds: t.timestamp_seconds,
+        seconds,
         tone: `tech-${t.status.toLowerCase().replaceAll("_", "-")}`,
         glyph: t.status === "PASS" ? "✓" : t.status === "FAIL" ? "✕" : "?",
-        label: t.name,
+        label: t.label,
         group: "Technical check",
         index: i + 1,
       });
@@ -112,8 +119,19 @@ export function ReleaseGateReportSection({
     };
   }, [markers, selectedId]);
 
-  const unresolved =
-    summary.unexpected_changes + summary.change_association_review + summary.requested_failed;
+  const unresolvedChanges = change_assessments.filter(isUnresolved);
+  const unresolvedTotal =
+    summary.requested_failed +
+    summary.requested_review +
+    summary.unexpected_changes +
+    summary.change_association_review +
+    summary.technical_failed +
+    summary.technical_review;
+
+  /* All requested edits landed, yet the gate still is not clear: name why. */
+  const requestedAllPassed =
+    summary.requested_total > 0 && summary.requested_passed === summary.requested_total;
+  const showPassIsNotApproval = requestedAllPassed && result.decision !== "READY_TO_PUBLISH";
 
   return (
     <>
@@ -188,11 +206,17 @@ export function ReleaseGateReportSection({
               </p>
             </div>
 
-            {requested_revisions.length === 0 ? (
-              <p className="gate-empty">
-                No revision notes were submitted with this release candidate, so the gate has no
-                requested revisions to verify. Detected changes below were assessed without them.
+            {showPassIsNotApproval ? (
+              <p className="gate-caveat">
+                <b>Every requested revision landed — that is not the same as an approved export.</b>{" "}
+                The gate is still {result.decision === "BLOCKED" ? "blocked" : "holding this for review"} because of what
+                changed <em>outside</em> the notes: see the {unresolvedChanges.length} unresolved
+                change{unresolvedChanges.length === 1 ? "" : "s"} below.
               </p>
+            ) : null}
+
+            {requested_revisions.length === 0 ? (
+              <p className="gate-empty">This gate run carried no requested revisions.</p>
             ) : (
               <div className="ledger">
                 {requested_revisions.map((r, i) => (
@@ -212,9 +236,7 @@ export function ReleaseGateReportSection({
           <section className="gate-block" aria-labelledby="gate-changes">
             <div className="report__subhead">
               <h3 id="gate-changes">
-                Unexpected and unresolved changes ({summary.unexpected_changes +
-                  summary.change_association_review}
-                )
+                Unexpected and unresolved changes ({unresolvedChanges.length})
               </h3>
               <p className="gate-block__tally muted">
                 {change_assessments.length} detected change
@@ -231,18 +253,16 @@ export function ReleaseGateReportSection({
               </p>
             ) : (
               <div className="ledger">
-                {change_assessments.map((c, i) => (
+                {change_assessments.map((assessment, i) => (
                   <ChangeAssessmentEntry
-                    key={c.id}
-                    assessment={c}
+                    key={assessment.change.id}
+                    assessment={assessment}
                     index={i}
-                    selected={selectedId === `${CHANGE_PREFIX}${c.id}`}
-                    associatedRevisionText={
-                      c.associated_revision_id
-                        ? revisionTextById.get(c.associated_revision_id) ?? null
-                        : null
-                    }
-                    onSelect={() => onSelect(`${CHANGE_PREFIX}${c.id}`)}
+                    selected={selectedId === `${CHANGE_PREFIX}${assessment.change.id}`}
+                    matchedRevisionTexts={assessment.matched_revision_ids
+                      .map((id) => revisionTextById.get(id))
+                      .filter((text): text is string => !!text)}
+                    onSelect={() => onSelect(`${CHANGE_PREFIX}${assessment.change.id}`)}
                   />
                 ))}
               </div>
@@ -279,9 +299,9 @@ export function ReleaseGateReportSection({
           </section>
 
           <p className="ledger__foot">
-            {unresolved === 0
+            {unresolvedTotal === 0
               ? "No unresolved changes detected above current thresholds. Release Gate reports what it can measure; it does not certify what it did not sample."
-              : `${unresolved} finding${unresolved === 1 ? "" : "s"} stand between this candidate and a clean gate.`}{" "}
+              : `${unresolvedTotal} finding${unresolvedTotal === 1 ? "" : "s"} stand between this candidate and a clean gate.`}{" "}
             Baseline {timecode(result.baseline_duration_seconds, true)} · candidate{" "}
             {timecode(result.candidate_duration_seconds, true)}.
           </p>

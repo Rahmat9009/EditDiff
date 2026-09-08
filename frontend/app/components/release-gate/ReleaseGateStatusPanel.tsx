@@ -78,8 +78,18 @@ function GateStages() {
 function GateSummary({ result }: { result: ReleaseGateResult }) {
   const { summary, decision } = result;
   const tone = decision.toLowerCase().replaceAll("_", "-");
-  const blockers = summary.requested_failed + summary.unexpected_changes + summary.technical_failed;
-  const open = summary.requested_review + summary.change_association_review + summary.technical_review;
+
+  /* backend/app/release_gate.py decide_release(): only a failed requested
+     revision or a failed BLOCKING technical check blocks a release. Unexpected
+     changes, ambiguous associations and review-status checks hold it for a
+     human instead. Follow the decision the backend actually made rather than
+     re-deriving one here. */
+  const blocking = summary.requested_failed + summary.technical_failed;
+  const held =
+    summary.requested_review +
+    summary.unexpected_changes +
+    summary.change_association_review +
+    summary.technical_review;
 
   return (
     <div className={`gate-score gate-score--${tone}`}>
@@ -112,16 +122,16 @@ function GateSummary({ result }: { result: ReleaseGateResult }) {
       </ul>
 
       <p className="score__call">
-        {blockers > 0
-          ? `${blockers} finding${blockers === 1 ? "" : "s"} contradict${
-              blockers === 1 ? "s" : ""
+        {decision === "BLOCKED"
+          ? `${blocking} finding${blocking === 1 ? "" : "s"} contradict${
+              blocking === 1 ? "s" : ""
             } this release.${
-              open > 0 ? ` ${open} more need${open === 1 ? "s" : ""} a human decision.` : ""
+              held > 0 ? ` ${held} more need${held === 1 ? "s" : ""} a human decision.` : ""
             }`
-          : open > 0
-            ? `${open} item${open === 1 ? "" : "s"} need${
-                open === 1 ? "s" : ""
-              } a human decision — the evidence does not settle ${open === 1 ? "it" : "them"}.`
+          : decision === "NEEDS_REVIEW"
+            ? `${held} finding${held === 1 ? "" : "s"} need${
+                held === 1 ? "s" : ""
+              } a human decision before publishing — including anything that changed outside the notes.`
             : "No unresolved changes detected above current thresholds."}
       </p>
 

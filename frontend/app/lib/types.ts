@@ -93,6 +93,13 @@ export type Report = {
   export_url?: string | null;
 };
 
+/** Runtime guard for the shared Evidence object (backend: Evidence). */
+export function isEvidence(value: unknown): value is Evidence {
+  if (!value || typeof value !== "object") return false;
+  const e = value as Partial<Evidence>;
+  return typeof e.explanation === "string" && Array.isArray(e.metrics);
+}
+
 /** Runtime guard for one verified revision row. */
 export function isVerifyResult(value: unknown): value is Result {
   if (!value || typeof value !== "object") return false;
@@ -134,6 +141,19 @@ export const CHANGE_KINDS: ChangeKind[] = ["VISUAL", "TIMING", "AUDIO", "TEXT", 
 
 export type ChangeConfidence = "HIGH" | "MEDIUM" | "LOW";
 
+/** backend: TextSemanticStatus */
+export type TextSemanticStatus =
+  | "not_configured"
+  | "attempted"
+  | "classified_text"
+  | "same_text"
+  | "unreadable"
+  | "low_confidence"
+  | "invalid_response"
+  | "api_error"
+  | "timeout"
+  | "call_limit_reached";
+
 export type ChangeEvidence = {
   pre_final_timestamp_seconds?: number | null;
   final_timestamp_seconds?: number | null;
@@ -146,6 +166,9 @@ export type ChangeEvidence = {
   metrics: Metric[];
   methods?: string[];
   reason_codes?: string[];
+  text_semantic_status?: TextSemanticStatus | null;
+  text_before?: string | null;
+  text_after?: string | null;
   explanation: string;
 };
 

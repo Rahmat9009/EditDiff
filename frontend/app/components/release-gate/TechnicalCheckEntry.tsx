@@ -1,7 +1,7 @@
 "use client";
 
-import { timecode } from "../../lib/format";
-import { technicalCheckDetail, type TechnicalCheck } from "../../lib/releaseGate";
+import { percent, timecode } from "../../lib/format";
+import { technicalCheckTimestamp, type TechnicalCheck } from "../../lib/releaseGate";
 import { MetricTable } from "../MetricTable";
 import { SeverityTag, TechnicalStatusBadge } from "./DispositionBadge";
 
@@ -14,8 +14,10 @@ type Props = {
 
 export function TechnicalCheckEntry({ check, index, selected, onSelect }: Props) {
   const tone = check.status.toLowerCase().replaceAll("_", "-");
-  const detail = technicalCheckDetail(check);
-  const timed = check.timestamp_seconds != null;
+  const seconds = technicalCheckTimestamp(check);
+  const { evidence } = check;
+  const hasDetail =
+    !!evidence.metrics?.length || !!evidence.reason_codes?.length || !!evidence.methods?.length;
 
   return (
     <article
@@ -27,11 +29,11 @@ export function TechnicalCheckEntry({ check, index, selected, onSelect }: Props)
           <span className="entry__index">{String(index + 1).padStart(2, "0")}</span>
           <TechnicalStatusBadge status={check.status} />
           <span className="entry__request">
-            <span className="entry__text">{check.name}</span>
+            <span className="entry__text">{check.label}</span>
             <span className="entry__meta">
-              {timed ? `${timecode(check.timestamp_seconds)} · ` : ""}
+              {seconds != null ? `${timecode(seconds)} · ` : ""}
               {check.severity === "BLOCKING" ? "blocking check" : "advisory check"} ·{" "}
-              {selected ? "showing detail" : timed ? "jump to moment" : "open detail"}
+              {selected ? "showing detail" : seconds != null ? "jump to moment" : "open detail"}
             </span>
           </span>
           <span className="entry__confidence entry__confidence--level">
@@ -41,24 +43,14 @@ export function TechnicalCheckEntry({ check, index, selected, onSelect }: Props)
       </h4>
 
       <div className="entry__body">
-        {detail ? <p className="entry__reason">{detail}</p> : null}
+        <p className="entry__reason">{check.explanation}</p>
 
-        {check.expected || check.observed ? (
-          <p className="entry__evidence-line">
-            {check.expected ? (
-              <>
-                <span className="entry__tag">Expected</span>
-                <span>{check.expected}</span>
-              </>
-            ) : null}
-            {check.observed ? (
-              <>
-                <span className="entry__tag">Observed</span>
-                <span>{check.observed}</span>
-              </>
-            ) : null}
-          </p>
-        ) : null}
+        <p className="entry__evidence-line">
+          <span className="entry__tag">Check</span>
+          <span className="entry__check-id">{check.id}</span>
+          <span className="entry__tag">Confidence</span>
+          <span>{percent(check.confidence)}</span>
+        </p>
 
         {check.status === "NOT_APPLICABLE" ? (
           <p className="entry__stance">
@@ -70,15 +62,28 @@ export function TechnicalCheckEntry({ check, index, selected, onSelect }: Props)
           </p>
         ) : null}
 
-        {selected && (check.metrics?.length || check.reason_codes?.length) ? (
+        {selected && hasDetail ? (
           <details className="disclosure" open>
             <summary>Inspect check details</summary>
-            {check.reason_codes?.length ? (
+            {evidence.methods?.length ? (
               <p className="disclosure__note">
-                Reason codes: {check.reason_codes.map((r) => r.replaceAll("_", " ")).join(", ")}
+                Methods: {evidence.methods.map((m) => m.replaceAll("_", " ")).join(", ")}
               </p>
             ) : null}
-            {check.metrics?.length ? <MetricTable metrics={check.metrics} /> : null}
+            {evidence.reason_codes?.length ? (
+              <p className="disclosure__note">
+                Reason codes: {evidence.reason_codes.map((r) => r.replaceAll("_", " ")).join(", ")}
+              </p>
+            ) : null}
+            {evidence.thresholds && Object.keys(evidence.thresholds).length ? (
+              <p className="disclosure__note">
+                Thresholds:{" "}
+                {Object.entries(evidence.thresholds)
+                  .map(([name, value]) => `${name.replaceAll("_", " ")}: ${value}`)
+                  .join("; ")}
+              </p>
+            ) : null}
+            {evidence.metrics?.length ? <MetricTable metrics={evidence.metrics} /> : null}
           </details>
         ) : null}
       </div>

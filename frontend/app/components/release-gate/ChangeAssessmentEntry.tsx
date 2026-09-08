@@ -1,21 +1,18 @@
 "use client";
 
 import { timecode } from "../../lib/format";
-import {
-  DISPOSITION_MEANING,
-  type ChangeAssessment,
-} from "../../lib/releaseGate";
+import type { ReleaseChangeAssessment } from "../../lib/releaseGate";
 import { ChangeKindBadge } from "../ChangeKindBadge";
 import { EvidenceFrame } from "../EvidenceFrame";
 import { MetricTable } from "../MetricTable";
 import { DispositionBadge } from "./DispositionBadge";
 
 type Props = {
-  assessment: ChangeAssessment;
+  assessment: ReleaseChangeAssessment;
   index: number;
   selected: boolean;
-  /** Raw text of the revision this change was matched to, when there is one. */
-  associatedRevisionText?: string | null;
+  /** Raw text of each requested revision this change was matched to. */
+  matchedRevisionTexts: string[];
   onSelect: () => void;
 };
 
@@ -23,10 +20,11 @@ export function ChangeAssessmentEntry({
   assessment,
   index,
   selected,
-  associatedRevisionText,
+  matchedRevisionTexts,
   onSelect,
 }: Props) {
-  const { kind, disposition, title, description, evidence } = assessment;
+  const { change, disposition, explanation } = assessment;
+  const { kind, title, description, evidence } = change;
   const preTs = evidence.pre_final_timestamp_seconds;
   const finalTs = evidence.final_timestamp_seconds;
   const displayTs = finalTs ?? preTs ?? null;
@@ -44,7 +42,7 @@ export function ChangeAssessmentEntry({
           <span className="entry__request">
             <span className="entry__text">{title}</span>
             <span className="entry__meta">
-              {timecode(displayTs)} · {kind.toLowerCase()} · {assessment.confidence} confidence ·{" "}
+              {timecode(displayTs)} · {kind.toLowerCase()} · {change.confidence} confidence ·{" "}
               {selected ? "showing evidence" : "jump to moment"}
             </span>
           </span>
@@ -59,14 +57,17 @@ export function ChangeAssessmentEntry({
 
         <p className="entry__evidence-line">
           <span className="entry__tag">Disposition</span>
-          {associatedRevisionText ? (
-            <span>
-              Matched to requested revision: <q>{associatedRevisionText}</q>
-            </span>
-          ) : (
-            <span>{assessment.association_rationale ?? DISPOSITION_MEANING[disposition]}</span>
-          )}
+          <span>{explanation}</span>
         </p>
+
+        {matchedRevisionTexts.length ? (
+          <p className="entry__evidence-line">
+            <span className="entry__tag">
+              Matched {matchedRevisionTexts.length === 1 ? "revision" : "revisions"}
+            </span>
+            <span>{matchedRevisionTexts.map((text) => `“${text}”`).join(" · ")}</span>
+          </p>
+        ) : null}
 
         <p className="entry__evidence-line entry__timestamps">
           <span className="entry__tag">Evidence alignment</span>
@@ -94,6 +95,18 @@ export function ChangeAssessmentEntry({
               </p>
             ) : null}
 
+            {evidence.text_before || evidence.text_after ? (
+              <div className="semantic">
+                <p className="semantic__head">Observed on-screen text</p>
+                {evidence.text_before ? (
+                  <p className="semantic__body">Baseline: {evidence.text_before}</p>
+                ) : null}
+                {evidence.text_after ? (
+                  <p className="semantic__body">Candidate: {evidence.text_after}</p>
+                ) : null}
+              </div>
+            ) : null}
+
             {evidence.pre_final_frame_path || evidence.final_frame_path ? (
               <div className="entry__frames">
                 <EvidenceFrame
@@ -119,6 +132,11 @@ export function ChangeAssessmentEntry({
               {evidence.reason_codes?.length ? (
                 <p className="disclosure__note">
                   Reason codes: {evidence.reason_codes.map((r) => r.replaceAll("_", " ")).join(", ")}
+                </p>
+              ) : null}
+              {evidence.text_semantic_status ? (
+                <p className="disclosure__note">
+                  Text inspection: {evidence.text_semantic_status.replaceAll("_", " ")}
                 </p>
               ) : null}
               {evidence.metrics?.length ? <MetricTable metrics={evidence.metrics} /> : null}

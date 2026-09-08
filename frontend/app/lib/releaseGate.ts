@@ -1,27 +1,25 @@
 /**
- * Types and runtime validation for the frozen Release Gate contract.
+ * Types and runtime validation for the Release Gate contract.
  *
  *   POST /release-gate            multipart: pre_final, final, notes
  *   GET  /release-gate/{id}
  *   GET  /release-gate/{id}/export
  *
- * The enumerations and the `ReleaseGateResult` / `ReleaseGateSummary` field
- * lists below are frozen and validated strictly.
+ * These mirror backend/app/models.py exactly:
+ *   ReleaseDecision, ChangeDisposition, TechnicalCheckStatus,
+ *   TechnicalCheckSeverity, TechnicalCheck, ReleaseChangeAssessment,
+ *   ReleaseGateSummary, ReleaseGateResult.
  *
- * The element shapes inside `requested_revisions`, `change_assessments` and
- * `technical_checks` are modelled on the shapes EditDiff already ships:
- *   - a requested revision is a Verify `Result` (request + verdict + evidence)
- *   - a change assessment is a Discover `DetectedChange` plus a disposition
- *   - a technical check is an id / label / status / severity record
- * Everything beyond the minimum a row needs to render is optional, so a
- * richer backend response shows more detail instead of failing validation.
+ * The backend is the source of truth. Every field the backend declares is
+ * required here and validated; nothing is optional "just in case".
  */
 
 import {
   isDiscoverChange,
+  isEvidence,
   isVerifyResult,
   type DetectedChange,
-  type Metric,
+  type Evidence,
   type Result,
 } from "./types";
 
@@ -54,6 +52,26 @@ export type TechnicalCheckSeverity = "ADVISORY" | "BLOCKING";
 
 export const TECHNICAL_CHECK_SEVERITIES: TechnicalCheckSeverity[] = ["ADVISORY", "BLOCKING"];
 
+/** backend: TechnicalCheck */
+export type TechnicalCheck = {
+  id: string;
+  label: string;
+  status: TechnicalCheckStatus;
+  severity: TechnicalCheckSeverity;
+  confidence: number;
+  explanation: string;
+  evidence: Evidence;
+};
+
+/** backend: ReleaseChangeAssessment — the detected change is nested, not flattened. */
+export type ReleaseChangeAssessment = {
+  change: DetectedChange;
+  disposition: ChangeDisposition;
+  matched_revision_ids: string[];
+  explanation: string;
+};
+
+/** backend: ReleaseGateSummary */
 export type ReleaseGateSummary = {
   requested_total: number;
   requested_passed: number;
@@ -80,28 +98,7 @@ export const RELEASE_GATE_SUMMARY_FIELDS: (keyof ReleaseGateSummary)[] = [
   "technical_review",
 ];
 
-/** A detected change plus the gate's judgement of whether it was asked for. */
-export type ChangeAssessment = DetectedChange & {
-  disposition: ChangeDisposition;
-  /** Set when the change was matched to one of the requested revisions. */
-  associated_revision_id?: string | null;
-  association_rationale?: string | null;
-};
-
-export type TechnicalCheck = {
-  id: string;
-  name: string;
-  status: TechnicalCheckStatus;
-  severity: TechnicalCheckSeverity;
-  detail?: string | null;
-  explanation?: string | null;
-  expected?: string | null;
-  observed?: string | null;
-  timestamp_seconds?: number | null;
-  metrics?: Metric[];
-  reason_codes?: string[];
-};
-
+/** backend: ReleaseGateResult */
 export type ReleaseGateResult = {
   report_id: string;
   decision: ReleaseDecision;
@@ -110,7 +107,7 @@ export type ReleaseGateResult = {
   baseline_duration_seconds: number;
   candidate_duration_seconds: number;
   requested_revisions: Result[];
-  change_assessments: ChangeAssessment[];
+  change_assessments: ReleaseChangeAssessment[];
   technical_checks: TechnicalCheck[];
 };
 
@@ -118,9 +115,19 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
-export function isChangeAssessment(value: unknown): value is ChangeAssessment {
-  if (!isDiscoverChange(value)) return false;
-  return isOneOf((value as ChangeAssessment).disposition, CHANGE_DISPOSITIONS);
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+export function isReleaseChangeAssessment(value: unknown): value is ReleaseChangeAssessment {
+  if (!value || typeof value !== "object") return false;
+  const c = value as Partial<ReleaseChangeAssessment>;
+  return (
+    isDiscoverChange(c.change) &&
+    isOneOf(c.disposition, CHANGE_DISPOSITIONS) &&
+    isStringArray(c.matched_revision_ids) &&
+    typeof c.explanation === "string"
+  );
 }
 
 export function isTechnicalCheck(value: unknown): value is TechnicalCheck {
@@ -128,9 +135,12 @@ export function isTechnicalCheck(value: unknown): value is TechnicalCheck {
   const c = value as Partial<TechnicalCheck>;
   return (
     typeof c.id === "string" &&
-    typeof c.name === "string" &&
+    typeof c.label === "string" &&
     isOneOf(c.status, TECHNICAL_CHECK_STATUSES) &&
-    isOneOf(c.severity, TECHNICAL_CHECK_SEVERITIES)
+    isOneOf(c.severity, TECHNICAL_CHECK_SEVERITIES) &&
+    typeof c.confidence === "number" &&
+    typeof c.explanation === "string" &&
+    isEvidence(c.evidence)
   );
 }
 
@@ -146,21 +156,35 @@ export function isReleaseGateResult(value: unknown): value is ReleaseGateResult 
   const c = value as Partial<ReleaseGateResult>;
   if (typeof c.report_id !== "string") return false;
   if (!isOneOf(c.decision, RELEASE_DECISIONS)) return false;
-  if (!Array.isArray(c.decision_reasons)) return false;
-  if (!c.decision_reasons.every((r) => typeof r === "string")) return false;
+  if (!isStringArray(c.decision_reasons)) return false;
   if (!isReleaseGateSummary(c.summary)) return false;
   if (typeof c.baseline_duration_seconds !== "number") return false;
   if (typeof c.candidate_duration_seconds !== "number") return false;
   if (!Array.isArray(c.requested_revisions) || !c.requested_revisions.every(isVerifyResult)) {
     return false;
   }
-  if (!Array.isArray(c.change_assessments) || !c.change_assessments.every(isChangeAssessment)) {
+  if (
+    !Array.isArray(c.change_assessments) ||
+    !c.change_assessments.every(isReleaseChangeAssessment)
+  ) {
     return false;
   }
   if (!Array.isArray(c.technical_checks) || !c.technical_checks.every(isTechnicalCheck)) {
     return false;
   }
   return true;
+}
+
+/**
+ * The timestamp a technical check points at, when it has one.
+ *
+ * backend/app/technical.py builds check evidence through `_metric_evidence`,
+ * which records metrics and reason codes but no timestamp, so today every
+ * check returns null here and is reported without a rail marker. Reading it
+ * from the evidence keeps the UI correct if a later check does carry one.
+ */
+export function technicalCheckTimestamp(check: TechnicalCheck): number | null {
+  return check.evidence.timestamp_seconds ?? null;
 }
 
 /** Non-colour cue: decisions never rely on hue alone. */
@@ -178,7 +202,7 @@ export const DECISION_LABEL: Record<ReleaseDecision, string> = {
 
 /**
  * Release Gate reports evidence, not omniscience: never tell an operator the
- * export is "safe", only what was and was not detected at current thresholds.
+ * export is "safe", only what the evidence did and did not establish.
  */
 export const DECISION_MEANING: Record<ReleaseDecision, string> = {
   READY_TO_PUBLISH:
@@ -186,7 +210,7 @@ export const DECISION_MEANING: Record<ReleaseDecision, string> = {
   NEEDS_REVIEW:
     "Evidence is incomplete or ambiguous somewhere in this export. A human decision is required before publishing.",
   BLOCKED:
-    "Evidence contradicts the release: at least one requested revision did not land, an unexpected change was detected, or a blocking technical check failed.",
+    "Evidence contradicts the release: a requested revision failed, or a blocking technical check failed.",
 };
 
 export const DISPOSITION_LABEL: Record<ChangeDisposition, string> = {
@@ -199,12 +223,6 @@ export const DISPOSITION_GLYPH: Record<ChangeDisposition, string> = {
   ACCOUNTED_FOR: "✓",
   UNEXPECTED: "!",
   REVIEW: "?",
-};
-
-export const DISPOSITION_MEANING: Record<ChangeDisposition, string> = {
-  ACCOUNTED_FOR: "This change matches a requested revision.",
-  UNEXPECTED: "This change was detected but was not requested in the notes.",
-  REVIEW: "EditDiff could not associate this change with a requested revision.",
 };
 
 export const TECHNICAL_STATUS_GLYPH: Record<TechnicalCheckStatus, string> = {
@@ -221,6 +239,7 @@ export const TECHNICAL_STATUS_LABEL: Record<TechnicalCheckStatus, string> = {
   NOT_APPLICABLE: "N/A",
 };
 
-export function technicalCheckDetail(check: TechnicalCheck): string {
-  return check.detail ?? check.explanation ?? "";
+/** Changes the gate could not tie to a passing requested revision. */
+export function isUnresolved(assessment: ReleaseChangeAssessment): boolean {
+  return assessment.disposition !== "ACCOUNTED_FOR";
 }

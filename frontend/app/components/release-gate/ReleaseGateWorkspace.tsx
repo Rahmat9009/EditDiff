@@ -6,6 +6,7 @@ import { downloadBlob } from "../../lib/download";
 import {
   DECISION_LABEL,
   RELEASE_DECISIONS,
+  technicalCheckTimestamp,
   type ReleaseGateResult,
 } from "../../lib/releaseGate";
 import { useApiHealthContext } from "../../lib/useApiHealth";
@@ -111,16 +112,18 @@ export function ReleaseGateWorkspace() {
       baselineTime = t;
       candidateTime = t;
     } else if (id.startsWith(CHANGE_PREFIX)) {
-      const found = source.change_assessments.find((c) => c.id === id.slice(CHANGE_PREFIX.length));
+      const found = source.change_assessments.find(
+        (a) => a.change.id === id.slice(CHANGE_PREFIX.length),
+      );
       if (found) {
-        const pre = found.evidence.pre_final_timestamp_seconds;
-        const fin = found.evidence.final_timestamp_seconds;
+        const pre = found.change.evidence.pre_final_timestamp_seconds;
+        const fin = found.change.evidence.final_timestamp_seconds;
         baselineTime = pre ?? fin ?? null;
         candidateTime = fin ?? pre ?? null;
       }
     } else if (id.startsWith(TECHNICAL_PREFIX)) {
       const found = source.technical_checks.find((t) => t.id === id.slice(TECHNICAL_PREFIX.length));
-      const t = found?.timestamp_seconds ?? null;
+      const t = found ? technicalCheckTimestamp(found) : null;
       baselineTime = t;
       candidateTime = t;
     }
@@ -146,24 +149,26 @@ export function ReleaseGateWorkspace() {
   );
 
   /**
-   * The gate has no fixtures of its own yet, so the demo loads the canonical
-   * revision pair as baseline / candidate. The result still comes from the API.
+   * The Release Gate has its own canonical fixture (sample/release-gate-*),
+   * mirrored byte for byte into public/demo by frontend/scripts/check-demo.mjs:
+   * one requested mute that lands, plus an unrequested logo regression the
+   * gate has to surface. The result still comes from the API.
    */
   const loadDemo = useCallback(async () => {
     setDemoBusy(true);
     setError("");
     try {
       const [a, b, noteFile] = await Promise.all([
-        fetch("/demo/demo-v1.mp4"),
-        fetch("/demo/demo-v2.mp4"),
-        fetch("/demo/edit-notes.txt"),
+        fetch("/demo/release-gate-pre-final.mp4"),
+        fetch("/demo/release-gate-final.mp4"),
+        fetch("/demo/release-gate-notes.txt"),
       ]);
       if (!a.ok || !b.ok || !noteFile.ok) {
-        throw new Error("Demo assets are missing from this build.");
+        throw new Error("Release Gate demo assets are missing from this build.");
       }
       const [blobA, blobB, demoNotes] = await Promise.all([a.blob(), b.blob(), noteFile.text()]);
-      setFile("baseline", new File([blobA], "demo-v1.mp4", { type: "video/mp4" }));
-      setFile("candidate", new File([blobB], "demo-v2.mp4", { type: "video/mp4" }));
+      setFile("baseline", new File([blobA], "release-gate-pre-final.mp4", { type: "video/mp4" }));
+      setFile("candidate", new File([blobB], "release-gate-final.mp4", { type: "video/mp4" }));
       setNotes(demoNotes.replace(/\s+$/, ""));
       setResult(null);
       setSelectedId(null);
@@ -178,6 +183,10 @@ export function ReleaseGateWorkspace() {
     const { baseline, candidate } = slotsRef.current;
     if (!baseline || !candidate) {
       setError("Add both the baseline and the release candidate.");
+      return;
+    }
+    if (!notes.trim()) {
+      setError("Add at least one revision note. The gate needs them to tell asked-for changes from unexpected ones.");
       return;
     }
     setBusy(true);
@@ -195,7 +204,7 @@ export function ReleaseGateWorkspace() {
       if (firstRevision) {
         selectIn(next, `${REVISION_PREFIX}${firstRevision.request.id}`);
       } else if (firstChange) {
-        selectIn(next, `${CHANGE_PREFIX}${firstChange.id}`);
+        selectIn(next, `${CHANGE_PREFIX}${firstChange.change.id}`);
       }
     } catch (err) {
       if (err instanceof ApiError) {
