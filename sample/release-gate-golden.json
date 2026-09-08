@@ -1,0 +1,12 @@
+{
+  "description": "Independent Release Gate golden fixture. Expected result applies with Gemini disabled.",
+  "expected_decision": "NEEDS_REVIEW",
+  "expected_requested_verdicts": [
+    "PASS"
+  ],
+  "required_change_dispositions": [
+    "ACCOUNTED_FOR",
+    "UNEXPECTED"
+  ],
+  "unexpected_change_kind": "VISUAL"
+}
