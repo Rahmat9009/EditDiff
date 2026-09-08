@@ -15,8 +15,9 @@ from fastapi.staticfiles import StaticFiles
 
 from .discovery import discover_changes
 from .media import MediaError, probe_media
-from .models import AnalyzeResponse, DiscoverResponse, RevisionRequest
+from .models import AnalyzeResponse, DiscoverResponse, ReleaseGateResult, RevisionRequest
 from .notes import parse_notes
+from .release_gate import run_release_gate
 from .semantic import text_semantic_readiness
 from .verifier import verify
 
@@ -26,7 +27,8 @@ UPLOADS = DATA / "uploads"
 EVIDENCE = DATA / "evidence"
 REPORTS = DATA / "reports"
 DISCOVER_REPORTS = DATA / "discover_reports"
-for directory in (UPLOADS, EVIDENCE, REPORTS, DISCOVER_REPORTS):
+RELEASE_GATE_REPORTS = DATA / "release_gate_reports"
+for directory in (UPLOADS, EVIDENCE, REPORTS, DISCOVER_REPORTS, RELEASE_GATE_REPORTS):
     directory.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 250 * 1024 * 1024
 
@@ -206,3 +208,70 @@ def export_discover_report(report_id: str) -> Response:
     report = _load_discover_report(report_id)
     return Response(content=report.model_dump_json(indent=2), media_type="application/json",
                     headers={"Content-Disposition": f'attachment; filename="editdiff-discover-{report_id}.json"'})
+
+
+def _release_gate_saved(requests: list[RevisionRequest], pre_final_path: Path, final_path: Path,
+                        evidence_dir: Path) -> ReleaseGateResult:
+    report = run_release_gate(requests, pre_final_path, final_path, evidence_dir)
+    temporary = RELEASE_GATE_REPORTS / f"{report.report_id}.tmp"
+    temporary.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    temporary.replace(RELEASE_GATE_REPORTS / f"{report.report_id}.json")
+    return report
+
+
+@app.post("/release-gate", response_model=ReleaseGateResult)
+async def release_gate(pre_final: UploadFile = File(...), final: UploadFile = File(...),
+                       notes: str = Form(...)) -> ReleaseGateResult:
+    if len(notes) > 20000:
+        raise HTTPException(400, "Notes exceed 20,000 characters.")
+    requests = parse_notes(notes)
+    if not requests or len(requests) > 30:
+        raise HTTPException(400, "Provide between 1 and 30 revision notes.")
+    report_id = uuid.uuid4().hex[:12]
+    report_dir, evidence_dir = UPLOADS / report_id, EVIDENCE / report_id
+    report_dir.mkdir(parents=True, exist_ok=False)
+    evidence_dir.mkdir(parents=True, exist_ok=False)
+    completed = False
+    try:
+        pre_final_path = report_dir / "pre_final.media"
+        final_path = report_dir / "final.media"
+        await _save(pre_final, pre_final_path)
+        await _save(final, final_path)
+        report = await run_in_threadpool(
+            _release_gate_saved, requests, pre_final_path, final_path, evidence_dir
+        )
+        completed = True
+        return report
+    except (MediaError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(422, "Could not decode uploaded videos within supported media limits.") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(503, "Required media processing service is unavailable.") from exc
+    finally:
+        await pre_final.close()
+        await final.close()
+        shutil.rmtree(report_dir)
+        if not completed:
+            shutil.rmtree(evidence_dir)
+
+
+def _load_release_gate_report(report_id: str) -> ReleaseGateResult:
+    if not re.fullmatch(r"[0-9a-f]{12}", report_id):
+        raise HTTPException(404, "Report not found")
+    path = RELEASE_GATE_REPORTS / f"{report_id}.json"
+    if not path.is_file():
+        raise HTTPException(404, "Report not found")
+    return ReleaseGateResult.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+@app.get("/release-gate/{report_id}", response_model=ReleaseGateResult)
+def get_release_gate_report(report_id: str) -> ReleaseGateResult:
+    return _load_release_gate_report(report_id)
+
+
+@app.get("/release-gate/{report_id}/export")
+def export_release_gate_report(report_id: str) -> Response:
+    report = _load_release_gate_report(report_id)
+    return Response(
+        content=report.model_dump_json(indent=2), media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="editdiff-release-gate-{report_id}.json"'},
+    )

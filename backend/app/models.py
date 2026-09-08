@@ -151,3 +151,69 @@ class DiscoverResponse(BaseModel):
     duration_delta_seconds: float
     summary: DiscoverSummary
     changes: list[DetectedChange]
+
+
+class ReleaseDecision(str, Enum):
+    READY_TO_PUBLISH = "READY_TO_PUBLISH"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    BLOCKED = "BLOCKED"
+
+
+class ChangeDisposition(str, Enum):
+    ACCOUNTED_FOR = "ACCOUNTED_FOR"
+    UNEXPECTED = "UNEXPECTED"
+    REVIEW = "REVIEW"
+
+
+class TechnicalCheckStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    REVIEW = "REVIEW"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class TechnicalCheckSeverity(str, Enum):
+    ADVISORY = "ADVISORY"
+    BLOCKING = "BLOCKING"
+
+
+class TechnicalCheck(BaseModel):
+    id: str
+    label: str
+    status: TechnicalCheckStatus
+    severity: TechnicalCheckSeverity
+    confidence: float = Field(ge=0, le=1)
+    explanation: str
+    evidence: Evidence
+
+
+class ReleaseChangeAssessment(BaseModel):
+    change: DetectedChange
+    disposition: ChangeDisposition
+    matched_revision_ids: list[str] = Field(default_factory=list)
+    explanation: str
+
+
+class ReleaseGateSummary(BaseModel):
+    requested_total: int
+    requested_passed: int
+    requested_failed: int
+    requested_review: int
+    accounted_changes: int
+    unexpected_changes: int
+    change_association_review: int
+    technical_passed: int
+    technical_failed: int
+    technical_review: int
+
+
+class ReleaseGateResult(BaseModel):
+    report_id: str
+    decision: ReleaseDecision
+    decision_reasons: list[str] = Field(default_factory=list)
+    summary: ReleaseGateSummary
+    baseline_duration_seconds: float
+    candidate_duration_seconds: float
+    requested_revisions: list[VerificationResult]
+    change_assessments: list[ReleaseChangeAssessment]
+    technical_checks: list[TechnicalCheck]
