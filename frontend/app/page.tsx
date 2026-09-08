@@ -1,443 +1,235 @@
-"use client";
-
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  analyze,
-  ApiError,
-  checkHealth,
-  discoverChanges,
-  fetchAuditExport,
-  fetchDiscoverExport,
-} from "./lib/api";
-import type { DiscoverReport, Report } from "./lib/types";
-import type { MediaMeta, MediaSlot } from "./components/DropZone";
-import { DiscoverIntakePanel } from "./components/DiscoverIntakePanel";
-import { DiscoverReportSection } from "./components/DiscoverReportSection";
-import { DiscoverStatusPanel } from "./components/DiscoverStatusPanel";
-import { Hero } from "./components/Hero";
-import { IntakePanel } from "./components/IntakePanel";
-import { ReportSection } from "./components/ReportSection";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { SiteFooter } from "./components/SiteFooter";
 import { SiteHeader } from "./components/SiteHeader";
-import { StatusPanel } from "./components/StatusPanel";
-import { WorkflowModeSelector, type WorkflowMode } from "./components/WorkflowModeSelector";
 
-type Slots = { v1: MediaSlot | null; v2: MediaSlot | null };
+export const metadata: Metadata = {
+  title: "EditDiff — Regression testing for video production",
+  description:
+    "Catch missed revisions and accidental changes before they ship. EditDiff verifies requested revisions, detects accidental changes, and runs final release QA between video exports.",
+};
 
-const API_OFFLINE_RETRY_MS = 5_000;
-const API_ONLINE_POLL_MS = 45_000;
-const API_HEALTH_TIMEOUT_MS = 10_000;
-
-export default function Home() {
-  const [mode, setMode] = useState<WorkflowMode>("verify");
-  const [slots, setSlots] = useState<Slots>({ v1: null, v2: null });
-  const [metas, setMetas] = useState<{ v1: MediaMeta | null; v2: MediaMeta | null }>({
-    v1: null,
-    v2: null,
-  });
-  const [notes, setNotes] = useState("");
-  const [report, setReport] = useState<Report | null>(null);
-  const [discoverReport, setDiscoverReport] = useState<DiscoverReport | null>(null);
-
-  const [busy, setBusy] = useState(false);
-  const [demoBusy, setDemoBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
-
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [seek, setSeek] = useState<{ time: number; nonce: number } | null>(null);
-
-  const [discoverSelectedId, setDiscoverSelectedId] = useState<string | null>(null);
-  const [discoverSeek, setDiscoverSeek] = useState<{
-    preFinalTime: number;
-    finalTime: number;
-    nonce: number;
-  } | null>(null);
-
-  const [exportState, setExportState] = useState<"idle" | "working" | "error">("idle");
-  const [exportNote, setExportNote] = useState("");
-
-  const slotsRef = useRef(slots);
-  slotsRef.current = slots;
-  const nonce = useRef(0);
-  const reportRef = useRef<HTMLDivElement>(null);
-
-  /* Revoke every object URL still alive when the page unmounts. */
-  useEffect(
-    () => () => {
-      const { v1, v2 } = slotsRef.current;
-      if (v1) URL.revokeObjectURL(v1.url);
-      if (v2) URL.revokeObjectURL(v2.url);
-    },
-    [],
-  );
-
-  useEffect(() => {
-    let disposed = false;
-    let retryTimer: number | null = null;
-    let requestTimer: number | null = null;
-    let controller: AbortController | null = null;
-
-    const pollHealth = async () => {
-      if (disposed || controller) return;
-      controller = new AbortController();
-      requestTimer = window.setTimeout(() => controller?.abort(), API_HEALTH_TIMEOUT_MS);
-      const online = await checkHealth(controller.signal);
-      if (requestTimer !== null) window.clearTimeout(requestTimer);
-      requestTimer = null;
-      controller = null;
-      if (disposed) return;
-
-      setApiOnline(online);
-      retryTimer = window.setTimeout(
-        pollHealth,
-        online ? API_ONLINE_POLL_MS : API_OFFLINE_RETRY_MS,
-      );
-    };
-
-    void pollHealth();
-    return () => {
-      disposed = true;
-      if (retryTimer !== null) window.clearTimeout(retryTimer);
-      if (requestTimer !== null) window.clearTimeout(requestTimer);
-      controller?.abort();
-    };
-  }, []);
-
-  const reportId = mode === "verify" ? report?.report_id ?? null : discoverReport?.report_id ?? null;
-  useEffect(() => {
-    if (!reportId) return;
-    const frame = window.requestAnimationFrame(() => {
-      const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      reportRef.current?.scrollIntoView({
-        behavior: still ? "auto" : "smooth",
-        block: "start",
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [reportId]);
-
-  const handleModeChange = useCallback((nextMode: WorkflowMode) => {
-    setMode(nextMode);
-    // Clear displayed result state and selections, but preserve uploaded files and notes
-    setReport(null);
-    setDiscoverReport(null);
-    setSelectedId(null);
-    setDiscoverSelectedId(null);
-    setSeek(null);
-    setDiscoverSeek(null);
-    setError("");
-    setExportNote("");
-  }, []);
-
-  const setFile = useCallback((role: "v1" | "v2", file: File | null) => {
-    setReport(null);
-    setDiscoverReport(null);
-    setSelectedId(null);
-    setDiscoverSelectedId(null);
-    setSeek(null);
-    setDiscoverSeek(null);
-    setExportNote("");
-    setMetas((prev) => ({ ...prev, [role]: null }));
-    setSlots((prev) => {
-      const current = prev[role];
-      if (current) URL.revokeObjectURL(current.url);
-      return { ...prev, [role]: file ? { file, url: URL.createObjectURL(file) } : null };
-    });
-  }, []);
-
-  const setMeta = useCallback((role: "v1" | "v2", meta: MediaMeta | null) => {
-    setMetas((prev) => ({ ...prev, [role]: meta }));
-  }, []);
-
-  const select = useCallback(
-    (id: string) => {
-      setSelectedId(id);
-      const result = report?.results.find((r) => r.request.id === id);
-      const time = result?.evidence.timestamp_seconds ?? result?.request.timestamp_seconds ?? null;
-      if (time !== null && time !== undefined) {
-        nonce.current += 1;
-        setSeek({ time, nonce: nonce.current });
-      }
-    },
-    [report],
-  );
-
-  const selectDiscover = useCallback(
-    (id: string) => {
-      setDiscoverSelectedId(id);
-      const change = discoverReport?.changes.find((c) => c.id === id);
-      if (!change) return;
-      const preTs = change.evidence.pre_final_timestamp_seconds ?? change.evidence.final_timestamp_seconds ?? 0;
-      const finalTs = change.evidence.final_timestamp_seconds ?? change.evidence.pre_final_timestamp_seconds ?? 0;
-      nonce.current += 1;
-      setDiscoverSeek({
-        preFinalTime: preTs,
-        finalTime: finalTs,
-        nonce: nonce.current,
-      });
-    },
-    [discoverReport],
-  );
-
-  const loadDemo = useCallback(async () => {
-    setDemoBusy(true);
-    setError("");
-    try {
-      const [a, b, noteFile] = await Promise.all([
-        fetch("/demo/demo-v1.mp4"),
-        fetch("/demo/demo-v2.mp4"),
-        fetch("/demo/edit-notes.txt"),
-      ]);
-      if (!a.ok || !b.ok || !noteFile.ok) throw new Error("Demo assets are missing from this build.");
-      const [blobA, blobB, demoNotes] = await Promise.all([a.blob(), b.blob(), noteFile.text()]);
-      setFile("v1", new File([blobA], "demo-v1.mp4", { type: "video/mp4" }));
-      setFile("v2", new File([blobB], "demo-v2.mp4", { type: "video/mp4" }));
-      /* Trailing newline would scroll the five demo requests out of view. */
-      setNotes(demoNotes.replace(/\s+$/, ""));
-      setReport(null);
-      setDiscoverReport(null);
-      setSelectedId(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load the demo files.");
-    } finally {
-      setDemoBusy(false);
-    }
-  }, [setFile]);
-
-  const runVerify = useCallback(async () => {
-    const { v1, v2 } = slotsRef.current;
-    if (!v1 || !v2) {
-      setError("Add both the previous and the revised export.");
-      return;
-    }
-    if (!notes.trim()) {
-      setError("Add at least one revision note.");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setReport(null);
-    setSelectedId(null);
-    setExportNote("");
-    try {
-      const next = await analyze(v1.file, v2.file, notes);
-      setReport(next);
-      setApiOnline(true);
-      const first = next.results[0];
-      if (first) {
-        setSelectedId(first.request.id);
-        const time = first.evidence.timestamp_seconds ?? first.request.timestamp_seconds ?? null;
-        if (time !== null && time !== undefined) {
-          nonce.current += 1;
-          setSeek({ time, nonce: nonce.current });
-        }
-      }
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-        if (err.offline) setApiOnline(false);
-      } else {
-        setError(err instanceof Error ? err.message : "Analysis failed.");
-      }
-    } finally {
-      setBusy(false);
-    }
-  }, [notes]);
-
-  const runDiscover = useCallback(async () => {
-    const { v1, v2 } = slotsRef.current;
-    if (!v1 || !v2) {
-      setError("Add both the pre-final and the final export.");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setDiscoverReport(null);
-    setDiscoverSelectedId(null);
-    setExportNote("");
-    try {
-      const next = await discoverChanges(v1.file, v2.file);
-      setDiscoverReport(next);
-      setApiOnline(true);
-      const first = next.changes[0];
-      if (first) {
-        setDiscoverSelectedId(first.id);
-        const preTs = first.evidence.pre_final_timestamp_seconds ?? first.evidence.final_timestamp_seconds ?? 0;
-        const finalTs = first.evidence.final_timestamp_seconds ?? first.evidence.pre_final_timestamp_seconds ?? 0;
-        nonce.current += 1;
-        setDiscoverSeek({
-          preFinalTime: preTs,
-          finalTime: finalTs,
-          nonce: nonce.current,
-        });
-      }
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-        if (err.offline) setApiOnline(false);
-      } else {
-        setError(err instanceof Error ? err.message : "Discovery failed.");
-      }
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  const exportAudit = useCallback(async () => {
-    if (!report) return;
-    setExportState("working");
-    setExportNote("");
-    try {
-      const remote = await fetchAuditExport(report);
-      const blob =
-        remote ??
-        new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `editdiff-${report.report_id}.json`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      setExportState("idle");
-      setExportNote(
-        remote
-          ? "Audit JSON downloaded from the API."
-          : "The API export could not be reached or validated. Downloaded the report already in this browser as JSON.",
-      );
-    } catch {
-      setExportState("error");
-      setExportNote("Export failed. Print / PDF still works offline.");
-    }
-  }, [report]);
-
-  const exportDiscover = useCallback(async () => {
-    if (!discoverReport) return;
-    setExportState("working");
-    setExportNote("");
-    try {
-      const remote = await fetchDiscoverExport(discoverReport);
-      const blob =
-        remote ??
-        new Blob([JSON.stringify(discoverReport, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `editdiff-changes-${discoverReport.report_id}.json`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      setExportState("idle");
-      setExportNote(
-        remote
-          ? "Change ledger JSON downloaded from the API."
-          : "The API export could not be reached. Downloaded the report already in this browser as JSON.",
-      );
-    } catch {
-      setExportState("error");
-      setExportNote("Export failed. Print / PDF still works offline.");
-    }
-  }, [discoverReport]);
-
+export default function LandingPage() {
   return (
     <>
-      <SiteHeader apiOnline={apiOnline} />
-      <main>
-        <Hero />
-
-        <div className="shell">
-          <WorkflowModeSelector
-            mode={mode}
-            onChange={handleModeChange}
-            disabled={busy || demoBusy}
-          />
-        </div>
-
-        <section
-          className="workspace shell"
-          aria-label={mode === "verify" ? "Run an audit" : "Discover changes"}
-        >
-          {mode === "verify" ? (
-            <>
-              <IntakePanel
-                v1={slots.v1}
-                v2={slots.v2}
-                v1Meta={metas.v1}
-                v2Meta={metas.v2}
-                notes={notes}
-                busy={busy}
-                demoBusy={demoBusy}
-                error={error}
-                onSelect={setFile}
-                onMeta={setMeta}
-                onNotes={setNotes}
-                onRun={runVerify}
-                onLoadDemo={loadDemo}
-              />
-              <StatusPanel busy={busy} report={report} />
-            </>
-          ) : (
-            <>
-              <DiscoverIntakePanel
-                preFinal={slots.v1}
-                final={slots.v2}
-                preFinalMeta={metas.v1}
-                finalMeta={metas.v2}
-                busy={busy}
-                error={error}
-                onSelect={setFile}
-                onMeta={setMeta}
-                onRun={runDiscover}
-              />
-              <DiscoverStatusPanel busy={busy} report={discoverReport} />
-            </>
-          )}
-        </section>
-
-        <div ref={reportRef} className="report__anchor" />
-        {mode === "verify" && report ? (
-          <ReportSection
-            report={report}
-            v1Url={slots.v1?.url ?? null}
-            v2Url={slots.v2?.url ?? null}
-            v1Name={slots.v1?.file.name ?? "—"}
-            v2Name={slots.v2?.file.name ?? "—"}
-            selectedId={selectedId}
-            seek={seek}
-            onSelect={select}
-            onExport={exportAudit}
-            exportState={exportState}
-            exportNote={exportNote}
-          />
-        ) : null}
-
-        {mode === "discover" && discoverReport ? (
-          <DiscoverReportSection
-            report={discoverReport}
-            preFinalUrl={slots.v1?.url ?? null}
-            finalUrl={slots.v2?.url ?? null}
-            preFinalName={slots.v1?.file.name ?? "—"}
-            finalName={slots.v2?.file.name ?? "—"}
-            selectedId={discoverSelectedId}
-            seek={discoverSeek}
-            onSelect={selectDiscover}
-            onExport={exportDiscover}
-            exportState={exportState}
-            exportNote={exportNote}
-          />
-        ) : null}
+      <SiteHeader />
+      <main className="landing" id="top">
+        <LandingHero />
+        <LandingProblem />
+        <LandingWorkflows />
+        <LandingEvidence />
+        <LandingClose />
       </main>
+      <SiteFooter />
+    </>
+  );
+}
 
-      <footer className="site-foot">
-        <div className="shell">
-          <p>EditDiff · video revision QA for creators and editors · evidence before assertion</p>
-          <p className="muted">
-            Requested edits can be verified; unlisted changes can be discovered. Unsupported certainty stays REVIEW.
+/* ------------------------------------------------------------------- hero */
+
+function LandingHero() {
+  return (
+    <section className="lander-hero">
+      <div className="shell lander-hero__inner">
+        <p className="eyebrow">Regression testing for video production</p>
+        <h1>
+          Don&rsquo;t publish a<br />
+          <em>broken edit</em>.
+        </h1>
+        <p className="lede lander-hero__lede">
+          EditDiff verifies requested revisions, detects accidental changes, and runs final
+          release QA between video exports.
+        </p>
+        <div className="cta-row">
+          <Link className="btn btn--run" href="/app/release-gate">
+            Run Release Gate
+            <span aria-hidden="true">→</span>
+          </Link>
+          <Link className="btn btn--secondary btn--lg" href="/app/compare">
+            Compare Versions
+          </Link>
+        </div>
+        <p className="lander-hero__promise">
+          Catch missed revisions and accidental changes before they ship.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/* ---------------------------------------------------------------- problem */
+
+function LandingProblem() {
+  return (
+    <section className="band band--problem" aria-labelledby="problem-heading">
+      <div className="shell band__grid">
+        <div className="band__lead">
+          <p className="eyebrow">The problem</p>
+          <h2 id="problem-heading">
+            Every export gets checked by a human scrubbing a timeline.
+          </h2>
+          <p className="band__body">
+            An editor sends back version four. Someone opens both files, scrubs to each note,
+            and tries to remember what the previous cut looked like. The requested fixes usually
+            get checked. The things nobody asked to change usually do not.
           </p>
         </div>
-      </footer>
+        <ul className="failure-list">
+          <li>
+            <span className="failure-list__index">01</span>
+            <p>A requested fix was marked done but never made it into the export.</p>
+          </li>
+          <li>
+            <span className="failure-list__index">02</span>
+            <p>A frame, a caption, or an audio bed changed while something else was fixed.</p>
+          </li>
+          <li>
+            <span className="failure-list__index">03</span>
+            <p>The version that ships is not the version that was approved.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------- workflows */
+
+function LandingWorkflows() {
+  return (
+    <>
+      <section className="band band--idea" aria-labelledby="idea-heading">
+        <div className="shell">
+          <h2 id="idea-heading" className="idea">
+            Software has regression tests.
+            <br />
+            Video production doesn&rsquo;t.
+            <br />
+            <em>EditDiff brings regression testing to video.</em>
+          </h2>
+        </div>
+      </section>
+
+      <section className="band" aria-labelledby="workflows-heading">
+        <div className="shell">
+          <p className="eyebrow">Two workflows</p>
+          <h2 id="workflows-heading" className="band__title">
+            One tells you what changed. One tells you whether to publish.
+          </h2>
+
+          <div className="workflow-grid">
+            <article className="workflow">
+              <header className="workflow__head">
+                <span className="workflow__index">01</span>
+                <h3>Compare Versions</h3>
+              </header>
+              <p className="workflow__claim">Understand exactly what changed.</p>
+              <dl className="workflow__modes">
+                <div>
+                  <dt>Verify Revisions</dt>
+                  <dd>Did the requested edits actually happen?</dd>
+                </div>
+                <div>
+                  <dt>Discover Changes</dt>
+                  <dd>What else changed between exports?</dd>
+                </div>
+              </dl>
+              <Link className="workflow__link" href="/app/compare">
+                Compare two exports <span aria-hidden="true">→</span>
+              </Link>
+            </article>
+
+            <article className="workflow workflow--flagship">
+              <header className="workflow__head">
+                <span className="workflow__index">02</span>
+                <h3>Release Gate</h3>
+                <span className="workflow__tag">Flagship</span>
+              </header>
+              <p className="workflow__claim">Run final QA before publishing.</p>
+              <ul className="workflow__checks">
+                <li>Requested revisions</li>
+                <li>Unexpected regressions</li>
+                <li>Technical QA</li>
+                <li>Release decision</li>
+              </ul>
+              <p className="workflow__answer">
+                Answers one question: <b>is this final export ready to publish?</b>
+              </p>
+              <Link className="workflow__link" href="/app/release-gate">
+                Gate a release candidate <span aria-hidden="true">→</span>
+              </Link>
+            </article>
+          </div>
+        </div>
+      </section>
     </>
+  );
+}
+
+/* --------------------------------------------------------------- evidence */
+
+function LandingEvidence() {
+  return (
+    <section className="band band--evidence" aria-labelledby="evidence-heading">
+      <div className="shell band__grid">
+        <div className="band__lead">
+          <p className="eyebrow">Architecture</p>
+          <h2 id="evidence-heading">Evidence first, conclusion second.</h2>
+          <p className="band__body">
+            EditDiff measures both exports before it says anything about them: aligned timelines,
+            bounded search windows, frame and audio signals, thresholds recorded alongside the
+            result. Every verdict carries the timestamp, the frames, and the measurements it came
+            from.
+          </p>
+          <p className="pull-quote">AI interprets evidence. It does not invent the evidence.</p>
+        </div>
+
+        <ol className="pipeline">
+          <li>
+            <span className="pipeline__step">Measure</span>
+            <p>Both exports are aligned and sampled. Signals are recorded with their thresholds.</p>
+          </li>
+          <li>
+            <span className="pipeline__step">Attribute</span>
+            <p>Each finding is bound to a timestamp, a window, and the frames behind it.</p>
+          </li>
+          <li>
+            <span className="pipeline__step">Interpret</span>
+            <p>
+              Requested intent is checked against what was measured. Disagreement is reported, not
+              resolved by guessing.
+            </p>
+          </li>
+          <li>
+            <span className="pipeline__step">Report</span>
+            <p>
+              What cannot be established stays <b>REVIEW</b>. EditDiff does not record a pass the
+              evidence does not support.
+            </p>
+          </li>
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ close */
+
+function LandingClose() {
+  return (
+    <section className="band band--close">
+      <div className="shell lander-close">
+        <h2>Check the export before it becomes the version everyone saw.</h2>
+        <div className="cta-row">
+          <Link className="btn btn--run" href="/app/release-gate">
+            Run Release Gate
+            <span aria-hidden="true">→</span>
+          </Link>
+          <Link className="btn btn--secondary btn--lg" href="/app/compare">
+            Compare Versions
+          </Link>
+        </div>
+      </div>
+    </section>
   );
 }

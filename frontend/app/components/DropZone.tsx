@@ -11,7 +11,7 @@ export type MediaSlot = {
 
 export type MediaMeta = { duration: number; width: number; height: number };
 type Props = {
-  role: "V1" | "V2" | "PRE-FINAL" | "FINAL";
+  role: "V1" | "V2" | "PRE-FINAL" | "FINAL" | "BASELINE" | "CANDIDATE";
   title: string;
   hint: string;
   slot: MediaSlot | null;

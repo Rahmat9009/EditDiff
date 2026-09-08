@@ -2,9 +2,12 @@ import "./globals.css";
 import type { Metadata, Viewport } from "next";
 
 export const metadata: Metadata = {
-  title: "EditDiff — Prove every revision landed",
+  title: {
+    default: "EditDiff — Regression testing for video production",
+    template: "%s",
+  },
   description:
-    "Evidence-first revision verification for video creators and editors. Upload the previous and revised export with your notes and get a timestamped PASS / FAIL / REVIEW ledger.",
+    "Catch missed revisions and accidental changes before they ship. EditDiff verifies requested revisions, detects accidental changes, and runs final release QA between video exports.",
 };
 
 export const viewport: Viewport = {

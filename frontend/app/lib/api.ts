@@ -1,3 +1,4 @@
+import { isReleaseGateResult, type ReleaseGateResult } from "./releaseGate";
 import { isDiscoverReport, isReport, type DiscoverReport, type Report } from "./types";
 
 /** Public base URL of the EditDiff API. Never put secrets in NEXT_PUBLIC_*. */
@@ -135,6 +136,100 @@ export async function fetchDiscoverExport(report: DiscoverReport): Promise<Blob 
     const blob = await res.blob();
     const payload: unknown = JSON.parse(await blob.text());
     if (!isDiscoverReport(payload) || payload.report_id !== report.report_id) return null;
+    return blob;
+  } catch {
+    return null;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Release Gate (frozen contract)
+   -------------------------------------------------------------------------- */
+
+const RELEASE_GATE_MISSING =
+  "This EditDiff API build does not expose /release-gate yet. Point NEXT_PUBLIC_API_URL at a build that serves the Release Gate endpoints.";
+
+const RELEASE_GATE_SHAPE =
+  "The API responded, but the release gate result was not in the expected format.";
+
+async function readJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function detailOf(payload: unknown, fallback: string): string {
+  if (payload && typeof payload === "object" && "detail" in payload) {
+    return String((payload as { detail: unknown }).detail);
+  }
+  return fallback;
+}
+
+/** Run the release gate on a baseline / release-candidate pair. */
+export async function runReleaseGate(
+  preFinal: File,
+  final: File,
+  notes: string,
+  signal?: AbortSignal,
+): Promise<ReleaseGateResult> {
+  const body = new FormData();
+  body.append("pre_final", preFinal);
+  body.append("final", final);
+  body.append("notes", notes);
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/release-gate`, { method: "POST", body, signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    throw new ApiError(OFFLINE_HINT, true);
+  }
+
+  const payload = await readJson(res);
+
+  if (res.status === 404 || res.status === 405) throw new ApiError(RELEASE_GATE_MISSING);
+  if (!res.ok) throw new ApiError(detailOf(payload, `Release gate failed (HTTP ${res.status}).`));
+  if (!isReleaseGateResult(payload)) throw new ApiError(RELEASE_GATE_SHAPE);
+  return payload;
+}
+
+/** Re-read a persisted release gate result by id. */
+export async function fetchReleaseGateResult(
+  reportId: string,
+  signal?: AbortSignal,
+): Promise<ReleaseGateResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/release-gate/${encodeURIComponent(reportId)}`, {
+      cache: "no-store",
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    throw new ApiError(OFFLINE_HINT, true);
+  }
+
+  const payload = await readJson(res);
+  if (!res.ok) {
+    throw new ApiError(detailOf(payload, `Release gate report ${reportId} is not available.`));
+  }
+  if (!isReleaseGateResult(payload)) throw new ApiError(RELEASE_GATE_SHAPE);
+  return payload;
+}
+
+/** Download the persisted release gate JSON; null means "fall back locally". */
+export async function fetchReleaseGateExport(result: ReleaseGateResult): Promise<Blob | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/release-gate/${encodeURIComponent(result.report_id)}/export`,
+      { cache: "no-store" },
+    );
+    if (!res.ok || !res.headers.get("content-type")?.includes("application/json")) return null;
+    const blob = await res.blob();
+    const payload: unknown = JSON.parse(await blob.text());
+    if (!isReleaseGateResult(payload) || payload.report_id !== result.report_id) return null;
     return blob;
   } catch {
     return null;

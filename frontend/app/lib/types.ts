@@ -93,6 +93,20 @@ export type Report = {
   export_url?: string | null;
 };
 
+/** Runtime guard for one verified revision row. */
+export function isVerifyResult(value: unknown): value is Result {
+  if (!value || typeof value !== "object") return false;
+  const r = value as Partial<Result>;
+  return (
+    typeof r.verdict === "string" &&
+    typeof r.confidence === "number" &&
+    !!r.request &&
+    typeof r.request.raw_text === "string" &&
+    !!r.evidence &&
+    typeof r.evidence.explanation === "string"
+  );
+}
+
 /** Runtime guard: a malformed or non-EditDiff response must not crash the UI. */
 export function isReport(value: unknown): value is Report {
   if (!value || typeof value !== "object") return false;
@@ -100,17 +114,7 @@ export function isReport(value: unknown): value is Report {
   if (typeof candidate.report_id !== "string") return false;
   if (!candidate.summary || typeof candidate.summary !== "object") return false;
   if (!Array.isArray(candidate.results)) return false;
-  return candidate.results.every(
-    (r) =>
-      r &&
-      typeof r === "object" &&
-      typeof r.verdict === "string" &&
-      typeof r.confidence === "number" &&
-      !!r.request &&
-      typeof r.request.raw_text === "string" &&
-      !!r.evidence &&
-      typeof r.evidence.explanation === "string",
-  );
+  return candidate.results.every(isVerifyResult);
 }
 
 export function semanticOf(evidence: Evidence): SemanticEvidence | null {
@@ -185,17 +189,21 @@ export function isDiscoverReport(value: unknown): value is DiscoverReport {
   if (!c.summary || typeof c.summary !== "object") return false;
   if (typeof c.summary.total_changes !== "number") return false;
   if (!Array.isArray(c.changes)) return false;
-  return c.changes.every(
-    (ch) =>
-      ch &&
-      typeof ch === "object" &&
-      typeof ch.id === "string" &&
-      typeof ch.kind === "string" &&
-      typeof ch.confidence === "string" &&
-      typeof ch.title === "string" &&
-      typeof ch.description === "string" &&
-      !!ch.evidence &&
-      typeof ch.evidence.explanation === "string" &&
-      Array.isArray(ch.evidence.metrics),
+  return c.changes.every(isDiscoverChange);
+}
+
+/** Runtime guard for one detected change row. */
+export function isDiscoverChange(value: unknown): value is DetectedChange {
+  if (!value || typeof value !== "object") return false;
+  const ch = value as Partial<DetectedChange>;
+  return (
+    typeof ch.id === "string" &&
+    typeof ch.kind === "string" &&
+    typeof ch.confidence === "string" &&
+    typeof ch.title === "string" &&
+    typeof ch.description === "string" &&
+    !!ch.evidence &&
+    typeof ch.evidence.explanation === "string" &&
+    Array.isArray(ch.evidence.metrics)
   );
 }
